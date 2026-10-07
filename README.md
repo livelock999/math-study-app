@@ -1,4 +1,4 @@
-# 小1 さんすう れんしゅう（MVP）
+# 小1 さんすう・こくご れんしゅう（MVP）
 
 Python + Streamlit の、5・10・20問ずつ学習するWebアプリです。
 計算問題・文章題、たし算・ひき算・ミックス、10まで・20まで、結果表示、間違い問題の再練習に対応します。
@@ -10,7 +10,7 @@ Streamlit Community Cloudへ公開し、履歴はSupabaseに保存する構成�
 クラウドURLをSafariで開けば、PCが停止しているときや別のWi-Fiでも利用できます。
 ローカルの `127.0.0.1` URLはiPhoneからは使えません。
 
-1. `supabase_attempts.sql` をSupabaseプロジェクトのSQL Editorで実行します。
+1. `supabase_attempts.sql` と `supabase_japanese.sql` をSupabaseプロジェクトのSQL Editorで実行します。
    心電図appと同じプロジェクトでも専用の `math_attempts` テーブルに保存します。
 2. GitHubの算数appリポジトリをStreamlit Community Cloudからデプロイします。
    ブランチは `main`、起動ファイルは `app.py`、Pythonは3.12を指定します。
@@ -72,6 +72,10 @@ python -m venv .venv
 | `activity.py` | 日本時間の日別学習と完了スタンプの集計 |
 | `words.py` | 6種類のひらがな文章題、安定した問題IDと本文の生成 |
 | `keyboard/index.html` | 入力欄のフォーカス、数字入力、Enter操作 |
+| `japanese_questions.py` | 国語6分野の80問と分類タグ |
+| `japanese.py` | 国語の出題、科目別保存と集計 |
+| `japanese_ui.py` | 国語の練習・履歴・苦手分析の画面 |
+| `japanese_keyboard/index.html` | 国語の数字選択・タッチ・並べ替え |
 | `requirements.txt` | Python依存ライブラリー |
 | `test_learning.py` | 問題の範囲と履歴保存の自動検証 |
 | `data/history.sqlite3` | 起動時に作られる履歴DB |
@@ -85,8 +89,9 @@ python -m venv .venv
 
 短いひらがなの本文を読み、「たす ＋」「ひく −」を選んでから数値を回答します。
 選ぶ前は数式・数字入力欄を表示しません。選択ボタンはTabで移動しEnterで決定できます。
-選択後の入力欄は、計算問題と同じ数字・テンキー・Enter操作です。
-演算選択と数値回答を合わせて1回答レコードに保存し、両方正しい場合だけ全体正解にします。
+選択後に自分で左右の数を入力して式を作り、その式の答えを入力します。
+式の入力と答えは数字・テンキー・Tab・Enter操作に対応し、「しきを なおす」で修正できます。
+演算選択・式の数と順序・計算結果を合わせて1回答レコードに保存し、3つとも正しい場合だけ全体正解にします。
 間違えた演算を選んでも回答でき、再練習では演算をもう一度選びます。
 回答時間は本文表示から演算選択を経て数字を確定するまでです。
 履歴への移動で入力枠が作り直された場合は、その表示から計測し直します。
@@ -100,8 +105,19 @@ python -m venv .venv
 `operation_selection_correct` は演算選択の正誤、`calculation_correct` は選んだ式の計算の正誤です。
 例：正しい式が3＋2の問題で「ひく」を選び1と答えると、演算は不正解、選んだ3−2の計算は正解、全体は不正解です。
 負数は入力できないため、誤選択の式が負の数になる場合は計算を未評価（NULL）にします。
-`equation_correct` は式を自作させていないのでNULLです。選んだ演算は、問題の正しい演算と選択正誤の組合せで判別できます。
-履歴表には形式・演算選択・選んだ式の計算を表示します。文章理解そのものを点数化する機能はありません。
+`equation_correct` は文章から使う数と順序の正誤です。たし算は左右の交換を認め、ひき算は正しい順序が必要です。
+演算の正誤は別に評価するため、正しい数を使って演算だけ間違えた場合は式の数と順序は正解になります。
+`user_equation` に自作式を保存します。更新前の回答は式の記録・評価ともNULLのままです。
+履歴表には自分の式と3種類の評価を表示します。文章理解そのものを点数化する機能はありません。
+
+### 国語との統合
+
+同じ家族用パスワード・学習者選択から、設定画面上部の「さんすう」「こくご」で切り替えます。
+国語はことば、1文読解、だれ・なに・どこ、文の順番、短文読解、穴埋めの6分野・80問です。
+選択問題は数字キーやタッチで回答し、文の順番は選んだ順に並べます。
+国語の履歴・苦手分析・再練習は国語画面から開きます。
+科目ごとの練習状態と履歴を分け、国語は `public.japanese_attempts`（ローカルでは `data/japanese.sqlite3`）へ保存します。
+既存の算数履歴・ユーザーID・家族用パスワードを引き継ぎます。国語は外部AIを使わずに集計します。
 
 ### 学習カレンダーとごほうび
 
@@ -162,7 +178,7 @@ SQLiteの `attempts` テーブルへ回答ごとにコミットし、既存の�
 全保存項目と型は `learning.py` の `COLUMNS` に定義しています。
 SQLiteで真偽値は0/1、未使用属性はNULLとして保存します。
 `calculation_correct` は計算問題では正しい式の計算結果、文章題では選んだ式の計算結果の正誤です。
-計算問題の `operation_selection_correct` はNULL、式作成用の `equation_correct` は両形式ともNULLです。
+計算問題の `operation_selection_correct`・`equation_correct`・`user_equation` はNULLです。
 穴埋め用の `blank_position` は現在 `answer`、`story_type` と `unknown_type` は文章題だけで使用します。
 `hint_used`、`dont_know_used` はfalseです。
 

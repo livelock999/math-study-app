@@ -17,6 +17,22 @@ def answers(count, correct, operation="subtraction", limit=20, left=13, right=8,
 
 
 class AssessmentTests(unittest.TestCase):
+    def test_equation_rate_excludes_legacy_null_and_separates_correct_calculation(self):
+        from words import make_word_problem
+
+        problem = make_word_problem("decrease", 20, 13, 8)
+        legacy = make_attempt(problem, "user_001", "legacy", 1, "normal", 5, 2, 1,
+                              selected_operation="subtraction")
+        written = make_attempt(problem, "user_001", "written", 1, "normal", 4, 2, 1,
+                               selected_operation="subtraction", equation_left=12, equation_right=8)
+        summary = assess([legacy, written])["word_normal"]
+        self.assertEqual(summary["count"], 2)
+        self.assertEqual(summary["equation_count"], 1)
+        self.assertEqual(summary["equation_correct"], 0)
+        self.assertEqual(summary["equation_rate"], 0)
+        self.assertEqual(summary["operation_rate"], 1)
+        self.assertEqual(summary["calculation_rate"], 1)
+
     def test_word_judgments_do_not_mix_with_calculation_mastery(self):
         from words import make_word_problem
 

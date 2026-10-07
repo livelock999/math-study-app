@@ -11,6 +11,58 @@ from words import make_word_problem, word_pool
 
 
 class WordTests(unittest.TestCase):
+    def test_self_written_equation_distinguishes_numbers_operation_and_calculation(self):
+        problem = make_word_problem("decrease", 20, 13, 8)
+        cases = [
+            (13, 8, "subtraction", 5, True, True, True, True),
+            (12, 8, "subtraction", 4, True, False, True, False),
+            (13, 8, "subtraction", 4, True, True, False, False),
+            (13, 8, "addition", 21, False, True, True, False),
+            (8, 13, "subtraction", 0, True, False, None, False),
+        ]
+        for left, right, operation, answer, op_correct, eq_correct, calc_correct, overall in cases:
+            with self.subTest(left=left, right=right, operation=operation):
+                record = make_attempt(problem, "user_001", "equation_test", 1, "normal", answer, 3, 1,
+                                      selected_operation=operation, equation_left=left, equation_right=right)
+                self.assertEqual(record["operation_selection_correct"], op_correct)
+                self.assertEqual(record["equation_correct"], eq_correct)
+                self.assertEqual(record["calculation_correct"], calc_correct)
+                self.assertEqual(record["is_correct"], overall)
+                symbol = "+" if operation == "addition" else "−"
+                self.assertEqual(record["user_equation"], f"{left} {symbol} {right}")
+
+    def test_addition_commutes_and_invalid_equation_operands_are_rejected(self):
+        problem = make_word_problem("combine", 20, 3, 8)
+        for left, right in ((3, 8), (8, 3)):
+            record = make_attempt(problem, "user_001", "swapped", 1, "normal", 11, 2, 1,
+                                  selected_operation="addition", equation_left=left, equation_right=right)
+            self.assertTrue(record["equation_correct"])
+            self.assertTrue(record["is_correct"])
+        for left, right in ((None, 8), (3, None), (-1, 8), (100, 8), (True, 8), ("3", 8)):
+            with self.subTest(left=left, right=right), self.assertRaises(ValueError):
+                make_attempt(problem, "user_001", "bad_equation", 1, "normal", 11, 2, 1,
+                             selected_operation="addition", equation_left=left, equation_right=right)
+
+    def test_old_word_answers_keep_unassessed_equation_fields_null(self):
+        problem = make_word_problem("decrease", 20, 13, 8)
+        record = make_attempt(problem, "user_001", "legacy", 1, "normal", 5, 2, 1,
+                              selected_operation="subtraction")
+        self.assertIsNone(record["equation_correct"])
+        self.assertIsNone(record["user_equation"])
+        self.assertTrue(record["is_correct"])
+        legacy_pending = dict(record)
+        legacy_pending.pop("user_equation")
+        retry = make_attempt(problem, "user_001", "retry", 1, "retry", 5, 1, 2,
+                             selected_operation="subtraction", equation_left=13, equation_right=8)
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "legacy_word.sqlite3"
+            init_db(path)
+            for answer in (legacy_pending, retry, retry):
+                save_attempt(answer, path)
+            with closing(sqlite3.connect(path)) as db:
+                rows = db.execute("SELECT user_equation, equation_correct, selection_type FROM attempts ORDER BY rowid").fetchall()
+            self.assertEqual(rows, [(None, None, "normal"), ("13 − 8", 1, "retry")])
+
     def test_six_story_types_have_correct_arithmetic_and_unknown_tags(self):
         for story in ("increase", "decrease", "combine", "separate", "compare", "difference"):
             addition = story in ("increase", "combine")

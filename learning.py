@@ -77,6 +77,7 @@ COLUMNS = {
     "answer_is_10": "INTEGER", "operand_contains_10": "INTEGER",
     "near_10": "INTEGER", "commutative_pair": "TEXT",
     "round_size": "INTEGER", "round_completed": "INTEGER",
+    "user_equation": "TEXT",
 }
 
 
@@ -177,30 +178,46 @@ def init_db(path=None):
         definitions = ", ".join(f'"{name}" {kind}' for name, kind in COLUMNS.items())
         connection.execute(f"CREATE TABLE IF NOT EXISTS attempts ({definitions})")
         existing = {row[1] for row in connection.execute("PRAGMA table_info(attempts)")}
-        for name in ("round_size", "round_completed"):
+        for name in ("round_size", "round_completed", "user_equation"):
             if name not in existing:
-                connection.execute(f"ALTER TABLE attempts ADD COLUMN {name} INTEGER")
+                connection.execute(f"ALTER TABLE attempts ADD COLUMN {name} {COLUMNS[name]}")
         connection.execute("CREATE INDEX IF NOT EXISTS user_sessions ON attempts(user_id, session_id)")
 
 
 def make_attempt(problem, user_id, session_id, order, selection, answer, seconds, count,
-                 round_size=None, selected_operation=None):
+                 round_size=None, selected_operation=None, equation_left=None, equation_right=None):
     if round_size is not None and (type(round_size) is not int or round_size < 1 or not 1 <= order <= round_size):
         raise ValueError("セットの問題数または出題順が不正です")
     is_word = problem["problem_format"] == "word_problem"
     if is_word and selected_operation not in ("addition", "subtraction"):
         raise ValueError("文章題では、たす・ひくを選んでください。")
     operation_correct = selected_operation == problem["operation"] if is_word else None
-    selected_answer = (problem["left_operand"] + problem["right_operand"] if selected_operation == "addition"
-                       else problem["left_operand"] - problem["right_operand"])
+    equation_correct, user_equation = None, None
+    left, right = problem["left_operand"], problem["right_operand"]
+    if equation_left is not None or equation_right is not None:
+        if (not is_word or type(equation_left) is not int or type(equation_right) is not int
+                or not 0 <= equation_left <= 99 or not 0 <= equation_right <= 99):
+            raise ValueError("式の2つの数には0〜99の整数を入れてください。")
+        # 演算とは独立して、文章の数量を正しく抽出・配置できたかを記録します。
+        equation_correct = ((equation_left, equation_right) in ((left, right), (right, left))
+                            if problem["operation"] == "addition" else (equation_left, equation_right) == (left, right))
+        left, right = equation_left, equation_right
+        user_equation = f"{left} {'+' if selected_operation == 'addition' else '−'} {right}"
+    selected_answer = left + right if selected_operation == "addition" else left - right
     calculation_correct = (answer == selected_answer if selected_answer >= 0 else None) if is_word else answer == problem["correct_answer"]
+    overall_correct = answer == problem["correct_answer"]
+    if is_word:
+        overall_correct = operation_correct and calculation_correct is True
+        if user_equation is not None:
+            overall_correct = overall_correct and equation_correct is True
     record = dict(problem)
     record.update(
         attempt_id=new_id("attempt"), user_id=user_id, session_id=session_id,
         datetime=datetime.now(timezone(timedelta(hours=9))).isoformat(),
         question_order=order, selection_type=selection, user_answer=answer,
-        is_correct=(operation_correct and calculation_correct is True) if is_word else answer == problem["correct_answer"],
-        operation_selection_correct=operation_correct, equation_correct=None,
+        is_correct=overall_correct,
+        operation_selection_correct=operation_correct, equation_correct=equation_correct,
+        user_equation=user_equation,
         calculation_correct=calculation_correct,
         response_time_sec=round(max(0, seconds), 3), attempt_count=count,
         hint_used=False, dont_know_used=False, retry_flag=selection == "retry",
@@ -211,6 +228,9 @@ def make_attempt(problem, user_id, session_id, order, selection, answer, seconds
 
 def save_attempt(record, path=None):
     """回答ごとにコミット。同じ attempt_id の再送だけ重複を防ぎます。"""
+    # 更新前から未保存の回答がある場合、この追加項目は未評価として保存します。
+    record = dict(record)
+    record.setdefault("user_equation", None)
     names = list(COLUMNS)
     if path is None:
         config = get_supabase_config()

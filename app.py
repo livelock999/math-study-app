@@ -14,7 +14,7 @@ from learning import (USERS, generate_problems, init_db, make_attempt, new_id,
 from assessment import assess, recommended_problems
 from activity import JST, month_summary
 
-st.set_page_config(page_title="さんすう れんしゅう", page_icon="🔢", layout="centered")
+st.set_page_config(page_title="さんすう・こくご れんしゅう", page_icon="📚", layout="centered")
 keyboard = components.declare_component("math_keyboard", path=str(Path(__file__).parent / "keyboard"))
 
 
@@ -26,7 +26,7 @@ def start_round(problems, selection_type):
         "session_id": new_id("session"), "problems": problems,
         "selection_type": selection_type, "index": 0, "answers": [],
         "phase": "choose" if problems[0]["problem_format"] == "word_problem" else "question",
-        "pending_record": None, "selected_operations": {},
+        "pending_record": None, "selected_operations": {}, "user_equations": {}, "equation_revision": {},
     }
     st.session_state.screen = "practice"
 
@@ -89,6 +89,7 @@ def settings_screen():
         st.rerun()
 
 
+
 def practice_screen():
     state = st.session_state.round
     index = state["index"]
@@ -96,6 +97,8 @@ def practice_screen():
     problem = problems[index]
     is_word = problem["problem_format"] == "word_problem"
     selected_operation = state.setdefault("selected_operations", {}).get(index)
+    equation = state.setdefault("user_equations", {}).get(index)
+    revision = state.setdefault("equation_revision", {}).get(index, 0)
     st.caption(f"{USERS[st.session_state.user_id]} ／ "
                f"{'もういちど れんしゅう' if state['selection_type'] == 'retry' else 'れんしゅう'}")
     st.progress(index / len(problems), text=f"{index + 1} / {len(problems)} もん")
@@ -103,12 +106,20 @@ def practice_screen():
     if state["pending_record"] is not None:
         st.subheader(problem["question_text"])
         st.write(f"あなたの こたえ：{state['pending_record']['user_answer']}")
+        if state["pending_record"].get("user_equation"):
+            st.write(f"じぶんの しき：{state['pending_record']['user_equation']}")
         st.error("きろくを ほぞんできませんでした。もういちど ボタンを おしてね。")
         if st.button("ほぞんを やりなおす", key="retry_save", type="primary"):
             if save_pending_answer(state):
                 st.rerun()
         return
+    # 更新前から回答中の文章題も、自分で式を作ってから答えます。
+    if is_word and state["phase"] == "question" and equation is None:
+        state["phase"] = "equation"
+        st.rerun()
     token = f"{state['session_id']}:{index}:{state['phase']}"
+    if is_word and revision:
+        token += f":edit{revision}"
     last_answer = state["answers"][-1] if state["phase"] == "feedback" else None
     event = keyboard(
         token=token, phase=state["phase"], question=problem["question_text"],
@@ -116,8 +127,11 @@ def practice_screen():
         answer=last_answer["user_answer"] if last_answer else None,
         last=index + 1 == len(problems), key="answer_keyboard", default=None,
         word_problem=is_word, question_id=f"{state['session_id']}:{index}",
-        equation=(f"{problem['left_operand']} {'+' if selected_operation == 'addition' else '−'} {problem['right_operand']} = ?"
-                  if is_word and selected_operation else None),
+        equation=(f"{equation['left']} {'+' if equation['operation'] == 'addition' else '−'} {equation['right']} = ?"
+                  if is_word and equation and state["phase"] != "equation" else None),
+        selected_operation=selected_operation,
+        equation_left=equation["left"] if equation else None,
+        equation_right=equation["right"] if equation else None,
     )
     if st.button("学習履歴", key="history_practice", use_container_width=True):
         open_history("practice")
@@ -128,8 +142,23 @@ def practice_screen():
         choice = event.get("selected_operation")
         if is_word and choice in ("addition", "subtraction"):
             state["selected_operations"][index] = choice
-            state["phase"] = "question"
+            state["phase"] = "equation"
             st.rerun()
+    elif state["phase"] == "equation" and event.get("action") == "submit_equation":
+        left, right = event.get("equation_left"), event.get("equation_right")
+        choice = event.get("selected_operation")
+        if (not is_word or choice not in ("addition", "subtraction")
+                or type(left) is not int or type(right) is not int or not 0 <= left <= 99 or not 0 <= right <= 99):
+            st.error("しきの 2つの すうじを いれてね")
+            return
+        state["selected_operations"][index] = choice
+        state["user_equations"][index] = {"left": left, "right": right, "operation": choice}
+        state["phase"] = "question"
+        st.rerun()
+    elif state["phase"] == "question" and is_word and event.get("action") == "edit_equation":
+        state["equation_revision"][index] = revision + 1
+        state["phase"] = "equation"
+        st.rerun()
     elif state["phase"] == "question" and event.get("action") == "answer":
         if is_word and selected_operation not in ("addition", "subtraction"):
             return
@@ -146,6 +175,8 @@ def practice_screen():
             state["selection_type"], answer, seconds, count,
             round_size=len(problems),
             selected_operation=selected_operation,
+            equation_left=equation["left"] if is_word else None,
+            equation_right=equation["right"] if is_word else None,
         )
         save_pending_answer(state)
         st.rerun()
@@ -222,6 +253,8 @@ def history_screen():
                 "回答時間（秒）": record["response_time_sec"],
                 "形式": "文章題" if record["problem_format"] == "word_problem" else "計算",
                 "たす・ひくの選択": correctness(record["operation_selection_correct"]),
+                "自分の式": record.get("user_equation") or "—（記録なし）",
+                "式に使う数・順序": correctness(record["equation_correct"]),
                 "選んだ式の計算": correctness(record["calculation_correct"]),
             })
     except (sqlite3.Error, OSError, ValueError, KeyError, TypeError):
@@ -371,13 +404,16 @@ def report_screen():
             def display_rate(value):
                 return f"{value:.0%}" if value is not None else "—"
             word_table.append({"練習": title, "回答数": data["count"],
-                               "両方正しい": display_rate(data["rate"]),
+                               "全体正答率": display_rate(data["rate"]),
                                "たす・ひくの選択": display_rate(data["operation_rate"]),
+                               "式に使う数・順序": display_rate(data["equation_rate"]),
+                               "式の評価数": data["equation_count"],
                                "選んだ式の計算": display_rate(data["calculation_rate"]),
                                "計算の評価数": data["calculation_count"]})
         st.dataframe(word_table, hide_index=True, use_container_width=True)
-        st.caption("演算選択と、その選んだ式の計算を別に見ています。式の自作・文章理解そのものは評価しません。"
-                   "選んだ式の答えが負の数になる場合は計算未評価です。")
+        st.caption("演算選択、式に使う数・順序、その式の計算を別に評価します。たし算の数量は交換可、ひき算は順序が必要です。"
+                   "式の数と順序の判定は演算選択とは独立です。文章理解そのものを点数化する機能ではありません。"
+                   "負の答えは計算未評価、以前の回答は式未評価です。")
     with st.expander("評価の見方"):
         st.write("種類ごとに5問未満は判断保留、正答率90%以上は「よくできています」、"
                  "80%以上90%未満は「もう少し練習」、80%未満は「優先して練習」です。"
@@ -424,7 +460,7 @@ def check_access():
     st.stop()
 
 
-st.title("🔢 さんすう れんしゅう")
+st.title("📚 さんすう・こくご れんしゅう")
 check_access()
 try:
     init_db()
@@ -438,7 +474,21 @@ except (sqlite3.Error, OSError):
 if "screen" not in st.session_state:
     st.session_state.screen = "user"
 
+if st.session_state.screen in ("settings", "jp_settings"):
+    math_tab, japanese_tab = st.columns(2)
+    if math_tab.button("🔢 さんすう", key="subject_math", disabled=st.session_state.screen == "settings",
+                       use_container_width=True):
+        st.session_state.screen = "settings"
+        st.rerun()
+    if japanese_tab.button("📖 こくご", key="subject_japanese", disabled=st.session_state.screen == "jp_settings",
+                           use_container_width=True):
+        st.session_state.screen = "jp_settings"
+        st.rerun()
+
 screens = {"user": user_screen, "settings": settings_screen,
            "practice": practice_screen, "results": results_screen, "history": history_screen,
            "report": report_screen, "calendar": calendar_screen}
+if st.session_state.screen.startswith("jp_"):
+    from japanese_ui import SCREENS
+    screens.update(SCREENS)
 screens[st.session_state.screen]()

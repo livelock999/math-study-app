@@ -79,8 +79,9 @@ def assess(records):
 
 def summarize_words(records):
     summary = summarize(records)
-    for name, column in (("operation", "operation_selection_correct"), ("calculation", "calculation_correct")):
-        evaluated = [row[column] for row in records if row[column] is not None]
+    for name, column in (("operation", "operation_selection_correct"), ("equation", "equation_correct"),
+                         ("calculation", "calculation_correct")):
+        evaluated = [row.get(column) for row in records if row.get(column) is not None]
         summary[f"{name}_count"] = len(evaluated)
         summary[f"{name}_correct"] = sum(bool(value) for value in evaluated)
         summary[f"{name}_rate"] = sum(bool(value) for value in evaluated) / len(evaluated) if evaluated else None

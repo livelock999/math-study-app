@@ -61,7 +61,7 @@ class LearningTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "old_history.sqlite3"
             old_columns = {name: kind for name, kind in COLUMNS.items()
-                           if name not in ("round_size", "round_completed")}
+                           if name not in ("round_size", "round_completed", "user_equation")}
             record = make_attempt(make_problem("addition", 10, 2, 3), "user_001", "old_session",
                                   1, "normal", 5, 1.5, 1)
             with closing(sqlite3.connect(path)) as db, db:
@@ -77,6 +77,8 @@ class LearningTests(unittest.TestCase):
                 saved = dict(db.execute("SELECT * FROM attempts").fetchone())
                 self.assertIn("round_size", saved)
                 self.assertIn("round_completed", saved)
+                self.assertIn("user_equation", saved)
+                self.assertIsNone(saved["user_equation"])
                 self.assertEqual(saved["attempt_id"], record["attempt_id"])
                 self.assertEqual(saved["user_answer"], 5)
                 self.assertFalse(saved["round_completed"])
@@ -212,6 +214,22 @@ class CloudStorageTests(unittest.TestCase):
                     self.assertEqual(len(payload), 1)
                     payload = payload[0]
                 self.assertEqual(payload, self.record)
+
+    def test_cloud_payload_saves_written_equation_and_all_three_judgments(self):
+        from words import make_word_problem
+
+        record = make_attempt(make_word_problem("decrease", 20, 13, 8), "user_001", "written", 1,
+                              "normal", 4, 2.5, 1, selected_operation="subtraction",
+                              equation_left=12, equation_right=8)
+        with patch.dict(os.environ, self.config), patch("learning.supabase_urlopen") as remote:
+            remote.return_value.__enter__.return_value.status = 201
+            save_attempt(record)
+            payload = json.loads(remote.call_args.args[0].data)
+            self.assertEqual(payload["user_equation"], "12 − 8")
+            self.assertTrue(payload["operation_selection_correct"])
+            self.assertFalse(payload["equation_correct"])
+            self.assertTrue(payload["calculation_correct"])
+            self.assertFalse(payload["is_correct"])
 
     def test_remote_errors_never_write_sqlite_or_expose_key(self):
         errors = [URLError("network failure"),
@@ -421,12 +439,19 @@ class AppFlowTests(unittest.TestCase):
         self.app.button(key=user_key).click().run()
         self.click_label("れんしゅう スタート")
 
-    def event(self, action, answer=None, selected_operation=None):
+    def event(self, action, answer=None, selected_operation=None, equation_left=None, equation_right=None):
         state = self.app.session_state.round
         token = f"{state['session_id']}:{state['index']}:{state['phase']}"
+        revision = state.get("equation_revision", {}).get(state["index"], 0)
+        if revision:
+            token += f":edit{revision}"
         event = {"token": token, "action": action, "answer": answer, "response_time_sec": 1.25}
         if selected_operation is not None:
             event["selected_operation"] = selected_operation
+        if equation_left is not None:
+            event["equation_left"] = equation_left
+        if equation_right is not None:
+            event["equation_right"] = equation_right
         self.app.session_state["answer_keyboard"] = event
         self.app.run()
         self.assertEqual(len(self.app.exception), 0)
@@ -759,6 +784,12 @@ class AppFlowTests(unittest.TestCase):
         self.assertEqual(self.rows(), [])
         self.assertEqual(self.app.session_state.round["phase"], "choose")
         chosen = self.event("choose_operation", selected_operation=problem["operation"])
+        self.assertEqual(self.app.session_state.round["phase"], "equation")
+        args = json.loads(self.app.get("component_instance")[0].proto.json_args)
+        self.assertIsNone(args.get("equation_left"))
+        self.assertIsNone(args.get("equation_right"))
+        self.event("submit_equation", selected_operation=problem["operation"],
+                   equation_left=problem["left_operand"], equation_right=problem["right_operand"])
         self.assertEqual(self.app.session_state.round["phase"], "question")
         args = json.loads(self.app.get("component_instance")[0].proto.json_args)
         self.assertIn("= ?", args["equation"])
@@ -772,12 +803,15 @@ class AppFlowTests(unittest.TestCase):
         answered = self.event("answer", problem["correct_answer"])
         self.assertEqual(len(self.rows()), 1)
         self.assertTrue(self.rows()[0]["is_correct"])
+        self.assertTrue(self.rows()[0]["equation_correct"])
+        self.assertIsNotNone(self.rows()[0]["user_equation"])
         self.app.session_state["answer_keyboard"] = answered
         self.app.run()
         self.assertEqual(len(self.rows()), 1)
         self.event("next")
         self.assertEqual(self.app.session_state.round["phase"], "choose")
         self.assertIsNone(self.app.session_state.round["selected_operations"].get(1))
+        self.assertIsNone(self.app.session_state.round["user_equations"].get(1))
 
     def test_word_wrong_operation_retry_save_failure_and_reward(self):
         self.start_words()
@@ -786,13 +820,15 @@ class AppFlowTests(unittest.TestCase):
         state["problems"][0] = make_word_problem("decrease", 20, 13, 8)
         self.app.run()
         self.event("choose_operation", selected_operation="addition")
+        self.event("submit_equation", selected_operation="addition", equation_left=13, equation_right=8)
         self.save_mock.side_effect = OSError("word save failed")
         self.event("answer", 21)
         pending = deepcopy(self.app.session_state.round["pending_record"])
         self.assertFalse(pending["operation_selection_correct"])
         self.assertTrue(pending["calculation_correct"])
         self.assertFalse(pending["is_correct"])
-        self.assertIsNone(pending["equation_correct"])
+        self.assertTrue(pending["equation_correct"])
+        self.assertEqual(pending["user_equation"], "13 + 8")
         self.assertEqual(self.rows(), [])
         self.save_mock.side_effect = self.save_record
         self.app.session_state["answer_keyboard"] = None
@@ -803,6 +839,8 @@ class AppFlowTests(unittest.TestCase):
         for index in range(1, 5):
             problem = self.app.session_state.round["problems"][index]
             self.event("choose_operation", selected_operation=problem["operation"])
+            self.event("submit_equation", selected_operation=problem["operation"],
+                       equation_left=problem["left_operand"], equation_right=problem["right_operand"])
             self.event("answer", problem["correct_answer"])
             self.event("next")
         self.assertEqual(self.app.session_state.screen, "results")
@@ -812,7 +850,9 @@ class AppFlowTests(unittest.TestCase):
         self.click_label("まちがえた もんだいを もういちど")
         self.assertEqual(self.app.session_state.round["phase"], "choose")
         self.assertEqual(len(self.app.session_state.round["problems"]), 1)
+        self.assertEqual(self.app.session_state.round["user_equations"], {})
         self.event("choose_operation", selected_operation="subtraction")
+        self.event("submit_equation", selected_operation="subtraction", equation_left=13, equation_right=8)
         self.event("answer", 5)
         self.event("next")
         self.assertEqual(self.app.session_state.screen, "results")
@@ -826,6 +866,33 @@ class AppFlowTests(unittest.TestCase):
         self.assertIn("2こ", self.app.metric[0].value)
         self.app.run()
         self.assertIn("2こ", self.app.metric[0].value)
+
+    def test_word_equation_edit_ignores_stale_submission_and_keeps_owned_numbers(self):
+        self.start_words()
+        from words import make_word_problem
+
+        self.app.session_state.round["problems"][0] = make_word_problem("decrease", 20, 13, 8)
+        self.app.run()
+        self.event("choose_operation", selected_operation="subtraction")
+        submitted = self.event("submit_equation", selected_operation="subtraction", equation_left=12,
+                               equation_right=8)
+        self.assertEqual(self.app.session_state.round["phase"], "question")
+        self.event("edit_equation")
+        self.assertEqual(self.app.session_state.round["phase"], "equation")
+        before = deepcopy(self.app.session_state.round)
+        args = json.loads(self.app.get("component_instance")[0].proto.json_args)
+        self.assertEqual(args["equation_left"], 12)
+        self.assertEqual(args["equation_right"], 8)
+        self.app.session_state["answer_keyboard"] = submitted
+        self.app.run()
+        self.assertEqual(self.app.session_state.round, before)
+        self.assertEqual(self.rows(), [])
+        self.event("submit_equation", selected_operation="subtraction", equation_left=13,
+                   equation_right=8)
+        self.event("answer", 5)
+        self.assertEqual(len(self.rows()), 1)
+        self.assertTrue(self.rows()[0]["equation_correct"])
+        self.assertEqual(self.rows()[0]["user_equation"], "13 − 8")
 
 
 if __name__ == "__main__":
