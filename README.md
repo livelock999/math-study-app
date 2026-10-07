@@ -264,6 +264,11 @@ with sqlite3.connect("data/history.sqlite3") as db:
 
 ## 検証
 
+子ども用の算数・国語の問題画面は、`furigana.py` で読みを確認した語だけに小さなふりがなを表示します。
+問題文・選択肢・ヒント・解説が対象です。ひらがなや未登録の語はそのまま表示し、
+保護者向けの分析・共通レポートや保存される問題文・回答には変更を加えません。
+辞書に語を追加するときは、その問題での読みを確認してください。
+
 ```powershell
 .\.venv\Scripts\python.exe -m unittest -v
 ```
