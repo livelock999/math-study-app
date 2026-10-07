@@ -22,6 +22,26 @@ def jp_row(identifier="j1", **changes):
 
 
 class CrossSubjectTests(unittest.TestCase):
+    def test_reading_confirmation_filters_users_duplicates_retries_independently(self):
+        first = math_row("m-read", is_correct=True, hint_used=False, reading_help_used=True)
+        math = [first, first, math_row("m-legacy", is_correct=False, hint_used=False),
+                math_row("m-retry", selection_type="retry", reading_help_used=False),
+                math_row("m-other", user_id="user_002", reading_help_used=True)]
+        japanese = [jp_row("j-read", hint_used=False, reading_help_used=True),
+                    jp_row("j-no", hint_used=True, reading_help_used=False),
+                    jp_row("j-retry", selection_type="retry", attempt_count=2, reading_help_used=True)]
+        report = build_report(math, japanese, "user_001", now=NOW)
+        initial_math = report["subjects"]["math"]["initial"]
+        initial_jp = report["subjects"]["japanese"]["initial"]
+        self.assertEqual((initial_math["reading_known_count"], initial_math["reading_unknown_count"]), (1, 1))
+        self.assertEqual((initial_math["reading_help_rate"], initial_math["hint_rate"], initial_math["rate"]), (1, 0, .5))
+        self.assertEqual((initial_jp["reading_help_rate"], initial_jp["hint_rate"], initial_jp["rate"]), (.5, .5, 1))
+        self.assertEqual(report["subjects"]["math"]["retry"]["reading_help_rate"], 0)
+        self.assertEqual(report["subjects"]["japanese"]["retry"]["reading_help_rate"], 1)
+        # These groups wrap subject rows; the reading flag must come from their source.
+        self.assertEqual(report["groups"][0]["reading_help_count"], 1)
+        self.assertEqual(report["groups"][5]["reading_help_count"], 1)
+
     def test_hint_summary_uses_wrapper_correct_and_excludes_unknown(self):
         summary = summarize([
             {"correct": False, "source": {"correct": True, "hint_used": True}},

@@ -52,11 +52,11 @@ def answer_text(question, answer):
 
 
 def make_record(question, user_id, session_id, order, selection, answer, seconds, attempt_count,
-                chain_id, hint_used=False, reading_mode="self_read", first_try_correct=None):
+                chain_id, hint_used=False, reading_mode="self_read", first_try_correct=None, reading_help_used=False):
     if user_id not in learning.USERS or not validate_answer(question, answer):
         raise ValueError("学習者または回答が不正です。")
     if (type(seconds) not in (int, float) or not math.isfinite(seconds) or seconds < 0
-            or type(attempt_count) is not int or attempt_count < 1 or type(hint_used) is not bool
+            or type(attempt_count) is not int or attempt_count < 1 or type(hint_used) is not bool or type(reading_help_used) is not bool
             or selection not in ("normal", "weak_area", "retry") or reading_mode not in ("self_read", "audio")):
         raise ValueError("回答の記録が不正です。")
     correct = answer == question["answer"]
@@ -66,7 +66,7 @@ def make_record(question, user_id, session_id, order, selection, answer, seconds
             "selection_type": selection, "selected_answer": answer,
             "selected_answer_text": answer_text(question, answer), "correct": correct,
             "datetime": datetime.now(JST).isoformat(), "response_time_sec": round(seconds, 3),
-            "attempt_count": attempt_count, "hint_used": hint_used, "reading_mode": reading_mode,
+            "attempt_count": attempt_count, "hint_used": hint_used, "reading_help_used": reading_help_used, "reading_mode": reading_mode,
             "retry_flag": selection == "retry", "final_correct": correct,
             "error_cause_tags": [] if correct else question["error_tags"].get(error_key, []),
             "review_due_at": None if correct else (datetime.now(JST) + timedelta(days=1)).isoformat()}

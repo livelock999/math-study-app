@@ -25,6 +25,12 @@ def record(q=None, user="user_001", answer=None, **updates):
 
 
 class JapaneseQuestionsTests(unittest.TestCase):
+    def test_reading_confirmation_rejects_non_boolean_flags(self):
+        for invalid in (None, 0, 1, "true", "false", [], {}):
+            with self.subTest(value=invalid), self.assertRaises(ValueError):
+                jp.make_record(QUESTIONS[0], "user_001", "s", 1, "normal", QUESTIONS[0]["answer"],
+                               2, 1, "chain", reading_help_used=invalid)
+
     def test_all_questions_have_valid_metadata_and_answers(self):
         self.assertEqual(len(QUESTIONS), 120)
         self.assertEqual(len({q["question_id"] for q in QUESTIONS}), 120)
@@ -73,6 +79,29 @@ class JapaneseQuestionsTests(unittest.TestCase):
 
 
 class JapaneseStorageTests(unittest.TestCase):
+    def test_reading_confirmation_roundtrip_preserves_originals_and_legacy_unknown(self):
+        with TemporaryDirectory() as folder:
+            path = Path(folder) / "jp.sqlite3"
+            jp.init_db(path)
+            question = next(q for q in QUESTIONS if q["category"] == "sentence")
+            current = jp.make_record(question, "user_001", "s", 1, "normal", question["answer"],
+                                     2, 1, "current", hint_used=False, reading_help_used=True)
+            old = record(question, chain_id="old")
+            old.pop("reading_help_used")
+            for row in (current, old):
+                jp.save_record(row, path)
+            rows = jp.read_all("user_001", path)
+            actual = next(row for row in rows if row["attempt_id"] == current["attempt_id"])
+            self.assertEqual(actual, current)
+            for field in ("text", "question", "choices", "answer", "explanation"):
+                self.assertEqual(actual[field], question[field])
+            self.assertEqual(actual["selected_answer_text"], question["choices"][question["answer"]])
+            self.assertTrue(actual["correct"])
+            self.assertFalse(actual["hint_used"])
+            summary = jp.analyze(rows)["summary"]
+            self.assertEqual((summary["reading_known_count"], summary["reading_unknown_count"]), (1, 1))
+            self.assertEqual((summary["reading_help_rate"], summary["hint_rate"], summary["rate"]), (1, 0, 1))
+
     def test_roundtrip_user_separation_idempotency_and_pagination(self):
         with TemporaryDirectory() as folder:
             path = Path(folder) / "jp.sqlite3"
@@ -285,7 +314,7 @@ class JapaneseAppTests(unittest.TestCase):
         self.assertEqual(self.app.session_state.jp_round["index"], 0)
         self.app.button(key="jp_resume").click().run()
         args = json.loads(self.app.get("component_instance")[0].proto.json_args)
-        self.assertEqual(args["draft"], {"order": partial, "hint_used": True, "elapsed": 12})
+        self.assertEqual(args["draft"], {"order": partial, "hint_used": True, "elapsed": 12, "reading_help_used": False})
         self.event(question["answer"], hint=True, seconds=18.5)
         saved = jp.read_all("user_001")
         self.assertEqual(len(saved), 1)
@@ -317,6 +346,36 @@ class JapaneseAppTests(unittest.TestCase):
         with patch("japanese.save_record", side_effect=OSError("secret_failure")):
             self.event(before["questions"][0]["answer"])
         pending = dict(self.app.session_state.jp_round["pending"])
+        self.assertEqual(jp.read_all("user_001"), [])
+        self.app.button(key="jp_retry_save").click().run()
+        self.assertEqual(jp.read_all("user_001"), [pending])
+
+        self.assertEqual(self.app.session_state.jp_round["phase"], "feedback")
+        self.app.button(key="jp_history_jp_practice").click().run()
+        self.app.button(key="jp_history_back").click().run()
+        self.assertEqual(self.app.session_state.jp_round["phase"], "feedback")
+        self.assertEqual(jp.read_all("user_001"), [pending])
+
+    def test_reading_event_survives_back_and_save_retry_without_changing_order_or_hint(self):
+        self.app.radio(key="jp_category").set_value("sequence")
+        self.app.button(key="jp_start").click().run()
+        question = self.app.session_state.jp_round["questions"][0]
+        self.event(question["answer"], reading_help_used="true")
+        self.assertEqual(jp.read_all("user_001"), [])
+        self.event(action="back", seconds=3, draft_order=question["answer"][:1], reading_help_used=True)
+        self.app.button(key="jp_resume").click().run()
+        args = json.loads(self.app.get("component_instance")[0].proto.json_args)
+        self.assertTrue(args["draft"]["reading_help_used"])
+        self.assertFalse(args["draft"]["hint_used"])
+        self.assertEqual(args["draft"]["order"], question["answer"][:1])
+        with patch("japanese.save_record", side_effect=OSError("temporary failure")):
+            self.event(question["answer"], seconds=5, reading_help_used=True)
+        pending = dict(self.app.session_state.jp_round["pending"])
+        self.assertTrue(pending["reading_help_used"])
+        self.assertFalse(pending["hint_used"])
+        self.assertEqual(pending["selected_answer"], question["answer"])
+        self.assertEqual(pending["selected_answer_text"], jp.answer_text(question, question["answer"]))
+        self.assertTrue(pending["correct"])
         self.assertEqual(jp.read_all("user_001"), [])
         self.app.button(key="jp_retry_save").click().run()
         self.assertEqual(jp.read_all("user_001"), [pending])

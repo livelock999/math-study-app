@@ -46,6 +46,8 @@ def report_screen():
                       "初回ヒントあり正答率": rate(data["initial"]["assisted_rate"]),
                       "初回ヒントあり回答数": data["initial"]["assisted_count"],
                       "初回ヒント記録不明": data["initial"]["hint_unknown_count"],
+                      "初回の読み方確認": data["initial"]["reading_help_count"],
+                      "読み方確認率": rate(data["initial"]["reading_help_rate"]),
                       "再練習回答数": data["retry"]["count"], "再練習正答率": rate(data["retry"]["rate"])})
     st.dataframe(table, hide_index=True, width="stretch")
     st.caption("算数の初回は通常練習、国語の初回は回答回数1（苦手練習を含む）です。"
@@ -64,6 +66,8 @@ def report_screen():
                "以前の履歴など、記録が不明な回答は自力にもヒントありにも含めません。"
                "自力正答率はヒントなしの回答、ヒントあり正答率はヒントを使った回答で計算します。"
                "ヒントを使うことも学習の一部です。国語の自力読み（音声なし）とヒントなしは別の条件です。")
+    st.caption("言葉を押して読み方を確認した回数は、ヒント使用や計算の正誤と分けて記録します。"
+               "ふりがなの表示は確認回数に含めません。以前の回答は読み方確認が未記録の場合があります。")
     st.info("文章題と国語読解の結果を並べて、練習内容を選ぶ参考にします。"
             "誤答の原因や教科間の因果関係を断定する分析ではありません。")
     st.write("**次に取り組むこと**")

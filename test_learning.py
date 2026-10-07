@@ -140,6 +140,41 @@ class LearningTests(unittest.TestCase):
                 self.assertIsNone(db.execute("SELECT story_type FROM attempts LIMIT 1").fetchone()[0])
 
 
+class ReadingHelpStorageTests(unittest.TestCase):
+    def test_migration_preserves_old_unknown_and_new_original_answer(self):
+        from hint_metrics import summarize_hints
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "history.sqlite3"
+            problem = make_problem("subtraction", 20, 13, 8)
+            old = make_attempt(problem, "user_001", "old", 1, "normal", 6, 2, 1)
+            old.pop("reading_help_used")
+            with closing(sqlite3.connect(path)) as db, db:
+                columns = {name: kind for name, kind in COLUMNS.items() if name != "reading_help_used"}
+                db.execute("CREATE TABLE attempts (" + ", ".join(f'"{n}" {k}' for n, k in columns.items()) + ")")
+                db.execute("INSERT INTO attempts (" + ", ".join(columns) + ") VALUES (" +
+                           ", ".join("?" for _ in columns) + ")", [old[name] for name in columns])
+            init_db(path)
+            new = make_attempt(problem, "user_001", "new", 1, "normal", 5, 3, 1,
+                               hint_used=False, reading_help_used=True)
+            save_attempt(new, path)
+            rows, _ = learning.read_attempts("user_001", path=path)
+            by_id = {row["attempt_id"]: row for row in rows}
+            self.assertIsNone(by_id[old["attempt_id"]]["reading_help_used"])
+            self.assertEqual(by_id[new["attempt_id"]]["reading_help_used"], 1)
+            self.assertEqual(by_id[new["attempt_id"]]["hint_used"], 0)
+            self.assertEqual(by_id[new["attempt_id"]]["question_text"], problem["question_text"])
+            self.assertEqual((by_id[new["attempt_id"]]["user_answer"], by_id[new["attempt_id"]]["is_correct"]), (5, 1))
+            summary = summarize_hints(rows)
+            self.assertEqual((summary["reading_known_count"], summary["reading_unknown_count"]), (1, 1))
+            self.assertEqual((summary["reading_help_rate"], summary["hint_rate"], summary["unaided_rate"]), (1, 0, .5))
+
+    def test_reading_confirmation_rejects_non_boolean_flags(self):
+        problem = make_problem("addition", 10, 2, 3)
+        for invalid in (None, 0, 1, "true", "false", [], {}):
+            with self.subTest(value=invalid), self.assertRaises(ValueError):
+                make_attempt(problem, "user_001", "s", 1, "normal", 5, 2, 1, reading_help_used=invalid)
+
+
 class CloudStorageTests(unittest.TestCase):
     """外部通信をモックし、クラウド指定時にローカルへ逃げないことを確認。"""
 
@@ -214,6 +249,22 @@ class CloudStorageTests(unittest.TestCase):
                     self.assertEqual(len(payload), 1)
                     payload = payload[0]
                 self.assertEqual(payload, self.record)
+
+    def test_cloud_roundtrip_preserves_reading_flag_without_changing_hint_or_answer(self):
+        current = dict(self.record, reading_help_used=True, hint_used=False)
+        with patch.dict(os.environ, self.config), patch("learning.supabase_urlopen") as remote:
+            response = remote.return_value.__enter__.return_value
+            response.status = 201
+            save_attempt(current)
+            posted = json.loads(remote.call_args.args[0].data)
+            self.assertEqual(posted, current)
+            self.assertTrue(posted["reading_help_used"])
+            self.assertFalse(posted["hint_used"])
+            response.status = 200
+            response.read.return_value = json.dumps([posted]).encode()
+            rows, more = learning.read_attempts("user_001")
+            self.assertFalse(more)
+            self.assertEqual(rows, [current])
 
     def test_cloud_payload_saves_written_equation_and_all_three_judgments(self):
         from words import make_word_problem
@@ -972,6 +1023,34 @@ class AppFlowTests(unittest.TestCase):
         self.app.button(key="retry_save").click().run()
         self.assertEqual(self.rows()[0]["attempt_id"], pending["attempt_id"])
         self.assertEqual(self.rows()[0]["hint_used"], 0)
+
+    def test_reading_confirmation_survives_pause_and_failed_save_without_becoming_hint(self):
+        self.start()
+        problem = deepcopy(self.app.session_state.round["problems"][0])
+        answer = problem["correct_answer"]
+        self.event("answer", answer, draft={"reading_help_used": "true"})
+        self.assertEqual(self.rows(), [])
+        self.assertEqual(self.app.session_state.round["phase"], "question")
+        self.event("pause", seconds=3, draft={"answer": str(answer), "reading_help_used": True})
+        self.assertEqual(self.rows(), [])
+        self.app.button(key="math_resume").click().run()
+        args = json.loads(self.app.get("component_instance")[0].proto.json_args)
+        self.assertTrue(args["draft"]["reading_help_used"])
+        self.assertFalse(args["hint_used"])
+        self.save_mock.side_effect = OSError("temporary failure")
+        self.event("answer", answer, seconds=5, draft={"reading_help_used": False})
+        pending = deepcopy(self.app.session_state.round["pending_record"])
+        self.assertTrue(pending["reading_help_used"])
+        self.assertFalse(pending["hint_used"])
+        self.assertTrue(pending["is_correct"])
+        self.assertEqual(pending["question_text"], problem["question_text"])
+        self.assertEqual(self.rows(), [])
+        self.save_mock.side_effect = self.save_record
+        self.app.button(key="retry_save").click().run()
+        row = self.rows()[0]
+        self.assertEqual(row["attempt_id"], pending["attempt_id"])
+        self.assertEqual((row["reading_help_used"], row["hint_used"], row["user_answer"], row["is_correct"]),
+                         (1, 0, answer, 1))
 
 
 if __name__ == "__main__":

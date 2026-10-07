@@ -15,6 +15,7 @@ from assessment import assess, recommended_problems
 from activity import JST, month_summary
 from words import guidance
 from furigana import READINGS
+from text_display import component_display, plain_label
 
 st.set_page_config(page_title="さんすう・こくご れんしゅう", page_icon="📚", layout="centered")
 keyboard = components.declare_component("math_keyboard", path=str(Path(__file__).parent / "keyboard"))
@@ -85,15 +86,15 @@ def settings_screen():
     if error:
         st.info(error)
     st.caption(f"1かい {count}もん。まちがえた もんだいは あとで れんしゅうできるよ。")
-    if st.button("れんしゅう スタート", type="primary", use_container_width=True, disabled=bool(error)):
+    if st.button(plain_label("れんしゅう スタート", st.session_state.user_id), type="primary", use_container_width=True, disabled=bool(error)):
         st.session_state.attempt_counts = {}
         start_round(generate_problems(mode, limit, count, special, problem_format), "normal")
         st.rerun()
-    if st.button("学習履歴", key="history_settings", use_container_width=True):
+    if st.button(plain_label("学習履歴", st.session_state.user_id), key="history_settings", use_container_width=True):
         open_history("settings")
-    if st.button("学習レポート", key="report_settings", use_container_width=True):
+    if st.button(plain_label("学習レポート", st.session_state.user_id), key="report_settings", use_container_width=True):
         open_report("settings")
-    if st.button("学習カレンダー・ごほうび", key="calendar_settings", use_container_width=True):
+    if st.button(plain_label("学習カレンダー・ごほうび", st.session_state.user_id), key="calendar_settings", use_container_width=True):
         open_calendar("settings")
     if st.button("なまえを かえる"):
         st.session_state.screen = "user"
@@ -115,12 +116,16 @@ def remember_practice_draft(state, index, event):
     if choice not in (None, "addition", "subtraction"):
         return False
     seconds = event.get("response_time_sec", draft["elapsed_sec"])
+    reading_help = incoming.get("reading_help_used", event.get("reading_help_used", draft.get("reading_help_used", False)))
+    if type(reading_help) is not bool:
+        return False
     if type(seconds) not in (int, float) or not 0 <= seconds < float("inf"):
         return False
     for name in ("answer", "equation_left", "equation_right"):
         draft[name] = incoming.get(name, draft[name])
     draft["selected_operation"] = choice
     draft["elapsed_sec"] = max(draft["elapsed_sec"], seconds)
+    draft["reading_help_used"] = draft.get("reading_help_used", False) or reading_help
     return True
 
 
@@ -169,6 +174,7 @@ def practice_screen():
     last_answer = state["answers"][-1] if state["phase"] == "feedback" else None
     event = keyboard(
         furigana=READINGS,
+        **component_display("math", problem, st.session_state.user_id),
         token=token, phase=state["phase"], question=problem["question_text"],
         correct=last_answer["is_correct"] if last_answer else None,
         answer=last_answer["user_answer"] if last_answer else None,
@@ -247,6 +253,7 @@ def practice_screen():
             equation_left=equation["left"] if is_word else None,
             equation_right=equation["right"] if is_word else None,
             hint_used=draft["hint_used"],
+            reading_help_used=draft.get("reading_help_used", False),
         )
         save_pending_answer(state)
         st.rerun()
@@ -281,11 +288,11 @@ def results_screen():
     if st.button(f"あたらしい {new_count}もんを れんしゅう", key="new_practice", use_container_width=True):
         st.session_state.screen = "settings"
         st.rerun()
-    if st.button("学習履歴", key="history_results", use_container_width=True):
+    if st.button(plain_label("学習履歴", st.session_state.user_id), key="history_results", use_container_width=True):
         open_history("results")
-    if st.button("学習レポート", key="report_results", use_container_width=True):
+    if st.button(plain_label("学習レポート", st.session_state.user_id), key="report_results", use_container_width=True):
         open_report("results")
-    if st.button("学習カレンダー・ごほうび", key="calendar_results", use_container_width=True):
+    if st.button(plain_label("学習カレンダー・ごほうび", st.session_state.user_id), key="calendar_results", use_container_width=True):
         open_calendar("results")
     if st.button("なまえを かえる"):
         st.session_state.screen = "user"
@@ -304,9 +311,9 @@ def history_screen():
     if st.button("もどる", key="history_back"):
         st.session_state.screen = st.session_state.history_return
         st.rerun()
-    if st.button("学習レポート", key="report_history", use_container_width=True):
+    if st.button(plain_label("学習レポート", st.session_state.user_id), key="report_history", use_container_width=True):
         open_report("history")
-    if st.button("学習カレンダー・ごほうび", key="calendar_history", use_container_width=True):
+    if st.button(plain_label("学習カレンダー・ごほうび", st.session_state.user_id), key="calendar_history", use_container_width=True):
         open_calendar("history")
     page = st.session_state.history_page
     try:
@@ -317,6 +324,7 @@ def history_screen():
             table.append({
                 "日時（日本時間）": answered_at.strftime("%Y/%m/%d %H:%M:%S"),
                 "問題": record["question_text"], "自分の回答": record["user_answer"],
+                "読み方の確認": "記録なし" if record.get("reading_help_used") is None else "あり" if record["reading_help_used"] else "なし",
                 "正しい答え": record["correct_answer"], "正誤": "○" if record["is_correct"] else "×",
                 "練習": "初回" if record["selection_type"] == "normal" else "再練習",
                 "出題順": record["question_order"], "回答回数": record["attempt_count"],
@@ -481,6 +489,9 @@ def report_screen():
     st.caption(f"ヒント記録あり {overall['hint_known_count']}問、記録なし {overall['hint_unknown_count']}問。"
                "ヒント使用率・自力／ヒントあり正答率は記録のある回答だけで集計します。ヒントは理解を助けるものです。")
     st.caption("回答時間は正解した初回回答の中央値です。休憩や操作の影響もあるため、速さで苦手を判定しません。")
+    st.caption(f"読み方を押して確認した初回回答：{overall['reading_help_count']}問"
+               f"（記録あり{overall['reading_known_count']}問・記録なし{overall['reading_unknown_count']}問）。"
+               "ヒント使用や計算の正誤とは別の記録です。ふりがな表示は確認回数に含めません。")
     st.write("**現状の評価と次の練習**")
     st.info(report["message"])
     if report["strengths"]:
@@ -596,10 +607,18 @@ if st.session_state.screen in ("settings", "jp_settings", "report", "jp_analysis
         st.rerun()
 
 from cross_subject_ui import report_screen as cross_report_screen
+from display_settings_ui import settings_screen as display_settings_screen
+
+if st.session_state.screen in ("settings", "jp_settings"):
+    if st.button("漢字・読み方設定（保護者向け・両教科共通）", key="display_open", use_container_width=True):
+        st.session_state.display_return = st.session_state.screen
+        st.session_state.screen = "display_settings"
+        st.rerun()
 
 screens = {"user": user_screen, "settings": settings_screen,
            "practice": practice_screen, "results": results_screen, "history": history_screen,
-           "report": report_screen, "calendar": calendar_screen, "cross_report": cross_report_screen}
+           "report": report_screen, "calendar": calendar_screen, "cross_report": cross_report_screen,
+           "display_settings": display_settings_screen}
 if st.session_state.screen.startswith("jp_"):
     from japanese_ui import SCREENS
     screens.update(SCREENS)

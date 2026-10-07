@@ -27,7 +27,8 @@ def summarize(rows):
     return {"count": len(rows), "correct": correct,
             "rate": correct / len(rows) if rows else None,
             **summarize_hints([{"correct": row["correct"],
-                                "hint_used": row.get("source", row).get("hint_used")}
+                                "hint_used": row.get("source", row).get("hint_used"),
+                                "reading_help_used": row.get("source", row).get("reading_help_used")}
                                for row in rows], correct_field="correct")}
 
 

@@ -38,13 +38,15 @@ create table if not exists public.math_attempts (
     commutative_pair text,
     round_size integer,
     round_completed boolean,
-    user_equation text
+    user_equation text,
+    reading_help_used boolean
 );
 
 -- 既存テーブルの更新。以前の行はNULLのままです。
 alter table public.math_attempts add column if not exists round_size integer;
 alter table public.math_attempts add column if not exists round_completed boolean;
 alter table public.math_attempts add column if not exists user_equation text;
+alter table public.math_attempts add column if not exists reading_help_used boolean;
 
 create index if not exists math_attempts_user_sessions
     on public.math_attempts (user_id, session_id);

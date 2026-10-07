@@ -11,6 +11,7 @@ import learning
 import japanese as jp
 from japanese_questions import CATEGORIES, QUESTION_LABELS, ERROR_LABELS
 from furigana import READINGS
+from text_display import component_display, plain_label
 
 keyboard = components.declare_component("japanese_keyboard", path=str(Path(__file__).parent / "japanese_keyboard"))
 
@@ -58,7 +59,7 @@ def load():
 
 
 def navigation(origin):
-    if st.button("国語の学習履歴", key=f"jp_history_{origin}", use_container_width=True):
+    if st.button(plain_label("国語の学習履歴", st.session_state.user_id), key=f"jp_history_{origin}", use_container_width=True):
         st.session_state.jp_history_page = 0
         open_view("jp_history", origin)
     if st.button("国語の苦手分析（保護者向け）", key=f"jp_analysis_{origin}", use_container_width=True):
@@ -83,7 +84,7 @@ def settings():
                                   format_func=lambda n: "おまかせ" if n is None else LEVELS[n], key="jp_particle_level")
     count = st.radio("もんだいの かず", [5, 10], index=1, format_func=lambda n: f"{n}もん",
                      horizontal=True, key="jp_count")
-    if st.button("こくご スタート", key="jp_start", type="primary", use_container_width=True):
+    if st.button(plain_label("こくご スタート", st.session_state.user_id), key="jp_start", type="primary", use_container_width=True):
         start(jp.choose_questions(category, count, particle_level=particle_level))
     if st.button("にがてを れんしゅう", key="jp_weak", use_container_width=True):
         records = load()
@@ -173,7 +174,8 @@ def practice():
                      correct_answer=jp.answer_text(question, question["answer"]) if previous else None,
                      explanation=question["explanation"] if previous else None,
                      last=index + 1 == len(state["questions"]), key="jp_keyboard", default=None,
-                     draft=state.get("draft", {}), furigana=READINGS)
+                     draft=state.get("draft", {}), furigana=READINGS,
+                     **component_display("japanese", question, st.session_state.user_id))
     # 問題中にiframeを破棄するとヒントと計測開始が消えるため、移動は回答保存後に限ります。
     if state["phase"] == "feedback":
         navigation("jp_practice")
@@ -183,11 +185,12 @@ def practice():
         seconds = event.get("response_time_sec")
         order = event.get("draft_order", [])
         if (type(seconds) not in (int, float) or not math.isfinite(seconds) or seconds < 0
-                or type(event.get("hint_used")) is not bool or not isinstance(order, list)
+                or type(event.get("hint_used")) is not bool or type(event.get("reading_help_used", False)) is not bool or not isinstance(order, list)
                 or any(type(i) is not int or not 0 <= i < len(question["choices"]) for i in order)
                 or len(order) != len(set(order))):
             return
-        state["draft"] = {"order": order, "hint_used": event["hint_used"], "elapsed": seconds}
+        state["draft"] = {"order": order, "hint_used": event["hint_used"], "elapsed": seconds,
+                          "reading_help_used": event.get("reading_help_used", False)}
         state["user_id"] = st.session_state.user_id
         state["paused"] = True
         state["resume_revision"] = state.get("resume_revision", 0) + 1
@@ -198,7 +201,8 @@ def practice():
                                     state["selection"], event.get("answer"), event.get("response_time_sec"),
                                     st.session_state.jp_counts.get(question["question_id"], 0) + 1,
                                     st.session_state.jp_chains[question["question_id"]], event.get("hint_used", False),
-                                    first_try_correct=st.session_state.get("jp_first_correct", {}).get(question["question_id"]))
+                                    first_try_correct=st.session_state.get("jp_first_correct", {}).get(question["question_id"]),
+                                    reading_help_used=event.get("reading_help_used", False))
         except (ValueError, TypeError):
             st.error("こたえを たしかめてね。")
             return
@@ -259,6 +263,7 @@ def history():
               "思考レベル": r["reasoning_level"], "回答時間（秒）": r["response_time_sec"],
               "回答回数": r["attempt_count"],
               "ヒント": "記録なし" if r.get("hint_used") is None else "あり" if r["hint_used"] else "なし",
+              "読み方の確認": "記録なし" if r.get("reading_help_used") is None else "あり" if r["reading_help_used"] else "なし",
               "読み方": "自力読み" if r["reading_mode"] == "self_read" else "読み上げ",
               "再回答": "あり" if r["retry_flag"] else "なし",
               "最終正誤（現在まで）": "○" if latest_chain[r["chain_id"]]["correct"] else "×",
@@ -321,6 +326,9 @@ def analysis():
     st.caption(f"ヒント使用率は記録のある初回回答{summary['hint_known_count']}問が対象です。"
                f"記録なし：{summary['hint_unknown_count']}問。ヒントを使った正解も正解として数えます。"
                "問題の違いもあるため、2つの正答率の差だけでヒントの効果は判断しません。")
+    st.caption(f"読み方を押して確認した初回回答：{summary['reading_help_count']}問"
+               f"（記録あり{summary['reading_known_count']}問・記録なし{summary['reading_unknown_count']}問）。"
+               "ヒント使用や正誤と分けて記録し、ふりがなの表示は確認回数に含めません。")
     from particles_ui import show_report
     show_report([r for r in records if r["reading_mode"] == mode])
     for title, key in [("分野別", "category"), ("スキルタグ別", "tags"), ("質問タイプ別", "question_word"),
