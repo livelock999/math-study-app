@@ -427,7 +427,7 @@ class AuthenticationTests(unittest.TestCase):
         self.assertEqual(len(app.exception), 0)
         self.assertTrue(app.session_state.access_granted)
         self.assertEqual(len(app.text_input), 0)
-        self.assertEqual(len(app.button), 2)
+        self.assertTrue({"select_user_001", "select_user_002", "parent_test_start"}.issubset({b.key for b in app.button}))
         self.init_mock.assert_called()
         app.run()
         self.assertEqual(len(app.text_input), 0)
@@ -437,7 +437,7 @@ class AuthenticationTests(unittest.TestCase):
     def test_default_local_is_open_and_secrets_can_require_password(self):
         app = self.app()
         self.assertEqual(len(app.text_input), 0)
-        self.assertEqual(len(app.button), 2)
+        self.assertTrue({"select_user_001", "select_user_002", "parent_test_start"}.issubset({b.key for b in app.button}))
         with patch("streamlit.secrets", {"MATH_REQUIRE_PASSWORD": True,
                                          "MATH_APP_PASSWORD": "test-secret-password"}):
             protected = self.app()

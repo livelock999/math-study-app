@@ -5,6 +5,7 @@ import streamlit as st
 from learning import USERS
 from learning_profiles import MODES, effective_grade, school_year, save_profile
 from text_display import session_profile
+from practice_mode import is_test_mode
 
 
 def settings_screen():
@@ -21,7 +22,8 @@ def settings_screen():
             st.session_state.display_profiles.pop(user_id, None)
             st.rerun()
     if st.session_state.pop("display_saved", False):
-        st.success("両教科の表示設定を保存しました。")
+        st.success("テスト用の表示に切り替えました。設定は保存していません。" if is_test_mode(st.session_state)
+                   else "両教科の表示設定を保存しました。")
     with st.form(f"display_form_{user_id}"):
         grade = st.selectbox("表示する学年", list(range(1, 7)), index=effective_grade(profile) - 1,
                              format_func=lambda n: f"小{n}", key=f"display_grade_{user_id}")
@@ -32,7 +34,7 @@ def settings_screen():
                                  help="例：学校。指定した字を含む語は、ひらがなで表示します。128字まで。",
                                  key=f"display_unlearned_{user_id}")
         tap = st.checkbox("ふりがなのない言葉は、押して読み方を確認できる", value=profile["reading_tap"], key=f"display_tap_{user_id}")
-        submitted = st.form_submit_button("両教科に保存", type="primary")
+        submitted = st.form_submit_button("保存せずに試す" if is_test_mode(st.session_state) else "両教科に保存", type="primary")
     st.caption("未習の漢字を含む語は、読みを確認した語単位でひらがなにします。"
                "「今年習う漢字だけ」は、その学年の漢字を含む語にふりがなを付けます。"
                "文字そのものを学ぶ国語問題は元の表記を守ります。")
@@ -44,7 +46,8 @@ def settings_screen():
                    "auto_advance": auto, "furigana_mode": mode,
                    "unlearned": [c for c in unlearned if not c.isspace()], "reading_tap": tap}
         try:
-            save_profile(updated)
+            if not is_test_mode(st.session_state):
+                save_profile(updated)
         except (OSError, ValueError, sqlite3.Error) as error:
             st.error(str(error) if isinstance(error, ValueError) else "保存できませんでした。設定は変更されていません。")
             return

@@ -16,6 +16,7 @@ from activity import JST, month_summary
 from words import guidance
 from furigana import READINGS
 from text_display import component_display, plain_label
+from practice_mode import is_test_mode, is_test_round, switch_mode, write_learning_answer
 
 st.set_page_config(page_title="さんすう・こくご れんしゅう", page_icon="📚", layout="centered")
 keyboard = components.declare_component("math_keyboard", path=str(Path(__file__).parent / "keyboard"))
@@ -31,6 +32,7 @@ def start_round(problems, selection_type):
         "phase": "choose" if problems[0]["problem_format"] == "word_problem" else "question",
         "pending_record": None, "selected_operations": {}, "user_equations": {}, "equation_revision": {},
         "user_id": st.session_state.user_id, "suspended": False, "drafts": {}, "interaction_revision": {},
+        "test_mode": is_test_mode(st.session_state),
     }
     st.session_state.screen = "practice"
 
@@ -42,7 +44,7 @@ def save_pending_answer(state):
     record.setdefault("round_size", len(state["problems"]))
     record.setdefault("round_completed", record["question_order"] == len(state["problems"]))
     try:
-        save_attempt(record)
+        write_learning_answer(state, st.session_state, save_attempt, record)
     except (sqlite3.Error, OSError, ValueError):
         return False
     state["answers"].append(record)
@@ -54,6 +56,12 @@ def save_pending_answer(state):
 
 def user_screen():
     st.subheader("だれが れんしゅうする？")
+    if not is_test_mode(st.session_state):
+        with st.expander("保護者の操作確認"):
+            st.caption("テスト中の回答は、履歴・分析・スタンプに残りません。開始すると途中の練習を終了します。")
+            if st.button("保護者のテストを始める（記録しない）", key="parent_test_start", use_container_width=True):
+                switch_mode(st.session_state, True)
+                st.rerun()
     for user_id, name in USERS.items():
         if st.button(name, key=f"select_{user_id}", type="primary", use_container_width=True):
             st.session_state.user_id = user_id
@@ -274,7 +282,7 @@ def results_screen():
     st.write("もういちど れんしゅうの けっか" if state["selection_type"] == "retry" else "はじめの れんしゅうの けっか")
     st.metric("せいかい", f"{total}もんちゅう {correct}もん")
     st.metric("せいかいりつ", f"{correct / total:.0%}")
-    if state["answers"][-1].get("round_completed"):
+    if state["answers"][-1].get("round_completed") and not is_test_round(state, st.session_state):
         st.success("⭐ ごほうびスタンプを 1こ もらったよ！")
     mistakes = [problem for problem, record in zip(state["problems"], state["answers"])
                 if not record["is_correct"]]
@@ -588,6 +596,13 @@ except (sqlite3.Error, OSError):
 
 if "screen" not in st.session_state:
     st.session_state.screen = "user"
+
+if is_test_mode(st.session_state):
+    st.warning("保護者のテスト中 — 回答を記録しません。ヒント・読み方確認・スタンプ・漢字設定も保存しません。")
+    st.caption("履歴やレポートには、通常の学習で保存した記録を表示します。テスト終了前にお子さまへ渡さないでください。ページを再読み込みすると通常モードに戻ります。")
+    if st.button("テストを終了して通常の学習に戻る", key="parent_test_end", use_container_width=True):
+        switch_mode(st.session_state, False)
+        st.rerun()
 
 if st.session_state.screen in ("settings", "jp_settings"):
     math_tab, japanese_tab = st.columns(2)

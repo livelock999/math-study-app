@@ -12,6 +12,7 @@ import japanese as jp
 from japanese_questions import CATEGORIES, QUESTION_LABELS, ERROR_LABELS
 from furigana import READINGS
 from text_display import component_display, plain_label
+from practice_mode import is_test_mode, write_learning_answer
 
 keyboard = components.declare_component("japanese_keyboard", path=str(Path(__file__).parent / "japanese_keyboard"))
 
@@ -44,7 +45,8 @@ def start(questions, selection="normal"):
     st.session_state.jp_round = {"session_id": learning.new_id("jp_session"), "questions": questions,
                                  "selection": selection, "index": 0, "answers": [], "phase": "question",
                                  "pending": None, "user_id": st.session_state.user_id,
-                                 "paused": False, "resume_revision": 0, "draft": {}}
+                                 "paused": False, "resume_revision": 0, "draft": {},
+                                 "test_mode": is_test_mode(st.session_state)}
     goto("jp_practice")
 
 
@@ -134,7 +136,7 @@ def snapshot(record):
 
 def save_pending(state):
     try:
-        jp.save_record(state["pending"])
+        write_learning_answer(state, st.session_state, jp.save_record, state["pending"])
     except (sqlite3.Error, OSError, ValueError):
         return False
     record = state["pending"]
