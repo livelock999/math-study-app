@@ -14,6 +14,7 @@ from urllib.parse import urlencode
 from urllib.error import HTTPError, URLError
 
 import learning
+from hint_metrics import summarize_hints
 from japanese_questions import QUESTIONS, CATEGORIES, TAG_LABELS, QUESTION_LABELS, ERROR_LABELS
 
 JST = timezone(timedelta(hours=9))
@@ -185,7 +186,7 @@ def metrics(records):
             "seconds": mean(r["response_time_sec"] for r in initial) if initial else None,
             "correct_seconds": mean([r["response_time_sec"] for r in initial if r["correct"]])
                                if any(r["correct"] for r in initial) else None,
-            "hint_rate": mean(r["hint_used"] for r in initial) if initial else None,
+            **summarize_hints(initial, "correct"),
             "retry_count": len(retried), "retry_success": sum(rows[-1]["correct"] for rows in retried),
             "eventual_correct": sum(rows[-1]["correct"] for rows in chains.values()),
             "chains": len(chains), "error_counts": dict(error_counts)}
@@ -214,8 +215,8 @@ def analyze(records, now=None, reading_mode="self_read"):
                 rank = 3 if stat["rate"] >= .9 else 2 if stat["rate"] >= .8 else 1 if stat["rate"] >= .6 else 0
                 if stat["rate"] < .8:
                     signals.append("初回の誤答が多い")
-                if stat["hint_rate"] >= .3:
-                    signals.append("ヒント使用が30%以上")
+                if stat["hint_known_count"] >= 5 and stat["hint_rate"] >= .3:
+                    signals.append("ヒントを手がかりに解いている（使用率30%以上）")
                     rank = min(rank, 1)
                 if (stat["correct_seconds"] is not None and baseline is not None
                         and sum(r["correct"] and r["attempt_count"] == 1 for r in rows) >= 5
@@ -243,6 +244,6 @@ def analyze(records, now=None, reading_mode="self_read"):
                                               3: "3：文をつなげる", 4: "4：推測する"}),
     }
     weak = [g for g in groups["category"] if g["status"] in ("× 苦手", "△ 練習中")]
-    weak.sort(key=lambda g: (g["rate"], -g["hint_rate"]))
+    weak.sort(key=lambda g: (g["rate"], -(g["hint_rate"] or 0)))
     return {"summary": summary, "week": metrics(week), "week_start": start, **groups,
             "weak_categories": [g["key"] for g in weak], "reading_mode": reading_mode}

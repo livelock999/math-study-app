@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 import learning
 import japanese
 from activity import JST
+from hint_metrics import summarize_hints
 
 
 def load_records(user_id):
@@ -24,7 +25,10 @@ def load_records(user_id):
 def summarize(rows):
     correct = sum(row["correct"] for row in rows)
     return {"count": len(rows), "correct": correct,
-            "rate": correct / len(rows) if rows else None}
+            "rate": correct / len(rows) if rows else None,
+            **summarize_hints([{"correct": row["correct"],
+                                "hint_used": row.get("source", row).get("hint_used")}
+                               for row in rows], correct_field="correct")}
 
 
 def build_report(math_records, japanese_records, user_id, days=30, now=None):
@@ -70,7 +74,8 @@ def build_report(math_records, japanese_records, user_id, days=30, now=None):
     for label, field in (("算数：文章題のたす・ひく選択", "operation_selection_correct"),
                          ("算数：文章題の式に使う数・順序", "equation_correct"),
                          ("算数：文章題の選んだ式の計算", "calculation_correct")):
-        evaluated = [{"correct": bool(r["source"][field])} for r in words if r["source"].get(field) is not None]
+        evaluated = [{"correct": bool(r["source"][field]), "source": r["source"]}
+                     for r in words if r["source"].get(field) is not None]
         groups.append({"label": label, **summarize(evaluated)})
     groups.append({"label": "国語：自力読みの読解（1文・情報抽出・短文）", **summarize(reading)})
     particle_records = [r["source"] for r in selected["japanese"] if r["source"]["category"] == "particles"
@@ -92,6 +97,12 @@ def build_report(math_records, japanese_records, user_id, days=30, now=None):
         suggestions.append("国語の1文読解・だれ／なに／どこ・短文読解から5問練習しましょう。")
     if groups[6]["count"] >= 5 and groups[6]["rate"] < .8:
         suggestions.append("てにをはで、行き先の「に」と動作する場所の「で」などを比べて練習しましょう。")
+    for subject, title in (("math", "算数"), ("japanese", "国語")):
+        initial = subjects[subject]["initial"]
+        if (initial["count"] >= 5 and initial["hint_known_count"] >= 5
+                and initial["hint_rate"] >= .3):
+            suggestions.append(f"{title}ではヒントを使って取り組んでいます。"
+                               "ヒントで分かった手順を一緒に振り返り、似た問題でも確かめましょう。")
     if not suggestions:
         suggestions.append("5問未満の項目は回答を増やし、5問以上の項目は今の練習を続けましょう。")
     dates = [r["at"] for rows in selected.values() for r in rows]

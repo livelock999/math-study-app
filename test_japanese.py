@@ -132,6 +132,24 @@ class JapaneseStorageTests(unittest.TestCase):
 
 
 class JapaneseAnalysisTests(unittest.TestCase):
+    def test_hint_breakdown_uses_initial_answers_and_excludes_unknown(self):
+        initial = [record(chain_id="none"), record(chain_id="help", hint_used=True),
+                   record(chain_id="old", hint_used=None)]
+        retry = record(chain_id="none", attempt_count=2, selection_type="retry", hint_used=True)
+        summary = jp.analyze(initial + [retry])["summary"]
+        self.assertEqual(summary["hint_rate"], .5)
+        self.assertEqual(summary["hint_unknown_count"], 1)
+        self.assertEqual(summary["unaided_count"], 1)
+        self.assertEqual(summary["assisted_count"], 1)
+        self.assertEqual(summary["assisted_rate"], 1)
+        self.assertEqual(summary["rate"], 1)
+
+    def test_unknown_hint_does_not_lower_japanese_evaluation(self):
+        rows = [record(chain_id=f"old{i}", hint_used=None) for i in range(5)]
+        group = jp.analyze(rows)["category"][0]
+        self.assertEqual(group["status"], "◎ 得意")
+        self.assertIsNone(group["hint_rate"])
+
     def test_initial_errors_retries_and_eventual_success_are_separate(self):
         first = record(answer=1)
         again = record(attempt_count=2, selection_type="retry", retry_flag=True, hint_used=True)

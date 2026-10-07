@@ -17,6 +17,66 @@ def answers(count, correct, operation="subtraction", limit=20, left=13, right=8,
 
 
 class AssessmentTests(unittest.TestCase):
+    def test_hint_metrics_keep_legacy_unknown_out_of_denominators(self):
+        records = answers(4, 3)
+        records[0]["hint_used"] = True
+        records[1]["hint_used"] = False
+        records[2].pop("hint_used", None)
+        records[3]["hint_used"] = None
+        report = assess(records)
+        for summary in (report["overall"], report["groups"][0]):
+            self.assertEqual(summary["rate"], .75)
+            self.assertEqual(summary["hint_known_count"], 2)
+            self.assertEqual(summary["hint_unknown_count"], 2)
+            self.assertEqual(summary["hint_rate"], .5)
+            self.assertEqual(summary["unaided_rate"], 1)
+            self.assertEqual(summary["assisted_rate"], 1)
+        self.assertFalse(report["groups"][0]["hint_support"])
+
+    def test_hints_support_practice_without_reducing_accuracy_status(self):
+        records = answers(10, 10)
+        for index, row in enumerate(records):
+            row["hint_used"] = index < 3
+        report = assess(records)
+        group = report["groups"][0]
+        self.assertEqual(group["status"], "よくできています")
+        self.assertTrue(group["hint_support"])
+        self.assertEqual(group["hint_rate"], .3)
+        self.assertEqual(report["target"], group["key"])
+        self.assertIn("必要なときはヒント", report["message"])
+        self.assertEqual(len(recommended_problems(report)), 5)
+
+    def test_sparse_hint_records_and_retry_hints_do_not_set_support_target(self):
+        records = answers(10, 10)
+        for index, row in enumerate(records):
+            row["hint_used"] = True if index < 4 else None
+        retries = answers(10, 10, selection="retry", start=10)
+        for row in retries:
+            row["hint_used"] = True
+        report = assess(records + retries)
+        self.assertIsNone(report["target"])
+        self.assertFalse(report["groups"][0]["hint_support"])
+        self.assertEqual(report["retry"]["hint_count"], 10)
+        self.assertEqual(report["overall"]["hint_count"], 4)
+
+    def test_word_hint_metrics_are_separate_from_calculation(self):
+        from words import make_word_problem
+
+        problem = make_word_problem("decrease", 20, 13, 8)
+        words = [make_attempt(problem, "user_001", "word_hints", 1, "normal", 5, 2, 1,
+                              selected_operation="subtraction", hint_used=True),
+                 make_attempt(problem, "user_001", "word_hints", 2, "normal", 4, 2, 1,
+                              selected_operation="subtraction", hint_used=False)]
+        calculations = answers(5, 5)
+        for row in calculations:
+            row["hint_used"] = False
+        report = assess(words + calculations)
+        self.assertEqual(report["word_normal"]["hint_rate"], .5)
+        self.assertEqual(report["word_normal"]["assisted_rate"], 1)
+        self.assertEqual(report["word_normal"]["unaided_rate"], 0)
+        self.assertEqual(report["overall"]["hint_rate"], 0)
+        self.assertIsNone(report["target"])
+
     def test_equation_rate_excludes_legacy_null_and_separates_correct_calculation(self):
         from words import make_word_problem
 

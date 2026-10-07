@@ -321,6 +321,7 @@ def history_screen():
                 "練習": "初回" if record["selection_type"] == "normal" else "再練習",
                 "出題順": record["question_order"], "回答回数": record["attempt_count"],
                 "回答時間（秒）": record["response_time_sec"],
+                "ヒント": hint_label(record.get("hint_used")),
                 "形式": "文章題" if record["problem_format"] == "word_problem" else "計算",
                 "たす・ひくの選択": correctness(record["operation_selection_correct"]),
                 "自分の式": record.get("user_equation") or "—（記録なし）",
@@ -358,6 +359,24 @@ def open_report(return_screen):
 
 def correctness(value):
     return "—（未評価）" if value is None else "○" if value else "×"
+
+
+def hint_label(value):
+    return "記録なし" if value is None else "ヒントあり" if value else "ヒントなし"
+
+
+def display_rate(value):
+    return f"{value:.0%}" if value is not None else "—"
+
+
+def hint_columns(summary):
+    return {"ヒント使用率": display_rate(summary["hint_rate"]),
+            "ヒント記録数": summary["hint_known_count"],
+            "ヒント記録なし": summary["hint_unknown_count"],
+            "自力正答率": display_rate(summary["unaided_rate"]),
+            "自力回答数": summary["unaided_count"],
+            "ヒントあり正答率": display_rate(summary["assisted_rate"]),
+            "ヒントあり回答数": summary["assisted_count"]}
 
 
 def open_calendar(return_screen):
@@ -453,6 +472,14 @@ def report_screen():
     counts.metric("初回の回答", f"{overall['count']}問")
     accuracy.metric("初回正答率", f"{overall['rate']:.0%}" if overall["count"] else "—")
     speed.metric("正解時の回答時間", f"{overall['seconds']:.1f}秒" if overall["seconds"] is not None else "—")
+    hint_rate, unaided, assisted = st.columns(3)
+    hint_rate.metric("初回のヒント使用率", display_rate(overall["hint_rate"]))
+    unaided.metric("自力正答率", display_rate(overall["unaided_rate"]),
+                   help=f"ヒントなしの初回回答 {overall['unaided_count']}問")
+    assisted.metric("ヒントあり正答率", display_rate(overall["assisted_rate"]),
+                    help=f"ヒントを使った初回回答 {overall['assisted_count']}問")
+    st.caption(f"ヒント記録あり {overall['hint_known_count']}問、記録なし {overall['hint_unknown_count']}問。"
+               "ヒント使用率・自力／ヒントあり正答率は記録のある回答だけで集計します。ヒントは理解を助けるものです。")
     st.caption("回答時間は正解した初回回答の中央値です。休憩や操作の影響もあるため、速さで苦手を判定しません。")
     st.write("**現状の評価と次の練習**")
     st.info(report["message"])
@@ -461,6 +488,7 @@ def report_screen():
     if report["groups"]:
         table = [{"問題の種類": group["label"], "初回回答数": group["count"],
                   "正答率": f"{group['rate']:.0%}", "評価": group["status"],
+                  **hint_columns(group), "練習の手がかり": group["support_message"],
                   "最近の変化": group["trend"]} for group in report["groups"]]
         st.dataframe(table, hide_index=True, use_container_width=True)
     retry = report["retry"]
@@ -471,16 +499,19 @@ def report_screen():
         st.write("**文章題の回答**")
         word_table = []
         for title, data in (("初回", report["word_normal"]), ("再練習", report["word_retry"])):
-            def display_rate(value):
-                return f"{value:.0%}" if value is not None else "—"
             word_table.append({"練習": title, "回答数": data["count"],
                                "全体正答率": display_rate(data["rate"]),
+                               **hint_columns(data),
                                "たす・ひくの選択": display_rate(data["operation_rate"]),
                                "式に使う数・順序": display_rate(data["equation_rate"]),
                                "式の評価数": data["equation_count"],
                                "選んだ式の計算": display_rate(data["calculation_rate"]),
                                "計算の評価数": data["calculation_count"]})
         st.dataframe(word_table, hide_index=True, use_container_width=True)
+        word_initial = report["word_normal"]
+        if word_initial["hint_known_count"] >= 5 and word_initial["hint_rate"] >= .3:
+            st.info("文章題ではヒントが考え方の支えになっています。必要なときはヒントを使い、"
+                    "慣れたら同じ種類の文章題を自力でも試しましょう。設定画面から文章題を選べます。")
         st.caption("演算選択、式に使う数・順序、その式の計算を別に評価します。たし算の数量は交換可、ひき算は順序が必要です。"
                    "式の数と順序の判定は演算選択とは独立です。文章理解そのものを点数化する機能ではありません。"
                    "負の答えは計算未評価、以前の回答は式未評価です。")
@@ -490,6 +521,9 @@ def report_screen():
                  "学力の診断ではなく、このアプリで回答した問題の傾向です。")
         st.write("最近の変化は同じ数の範囲・演算・繰り上がり／繰り下がりの種類について、"
                  "直近10問とその前10問を比較します。最大500回答を集計し、再練習は習熟の判定に含めません。")
+        st.write("初回のヒント記録が同じ種類で5問以上あり、使用率が30%以上なら、"
+                 "ヒントが支えになっている種類として練習を提案します。正答率の評価はヒント使用の有無で減点しません。"
+                 "回答後の解説はヒント使用に含めず、ヒントを開いただけで未回答の問題も回答数に含めません。")
     label = "おすすめの5問を れんしゅう" if report["target"] else "ミックス10問を れんしゅう"
     st.caption("おすすめの練習は計算問題の回答だけから選びます。文章題は設定画面から選べます。")
     if st.button(label, key="report_practice", type="primary", use_container_width=True):

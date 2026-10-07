@@ -40,16 +40,30 @@ def report_screen():
         data = report["subjects"][subject]
         table.append({"教科": title, "全回答数": data["total"], "学習日数": data["days"],
                       "初回回答数": data["initial"]["count"], "初回正答率": rate(data["initial"]["rate"]),
+                      "初回ヒント使用率": rate(data["initial"]["hint_rate"]),
+                      "初回自力正答率": rate(data["initial"]["unaided_rate"]),
+                      "初回自力回答数": data["initial"]["unaided_count"],
+                      "初回ヒントあり正答率": rate(data["initial"]["assisted_rate"]),
+                      "初回ヒントあり回答数": data["initial"]["assisted_count"],
+                      "初回ヒント記録不明": data["initial"]["hint_unknown_count"],
                       "再練習回答数": data["retry"]["count"], "再練習正答率": rate(data["retry"]["rate"])})
     st.dataframe(table, hide_index=True, width="stretch")
     st.caption("算数の初回は通常練習、国語の初回は回答回数1（苦手練習を含む）です。"
                "教科ごとに問題・難易度が違うため、正答率は教科間の能力差を示しません。")
     st.write("**計算・文章題・国語読解を並べて見る**")
     st.dataframe([{"項目": g["label"], "初回評価数": g["count"], "正答率": rate(g["rate"]),
+                   "ヒント使用率": rate(g["hint_rate"]),
+                   "自力正答率": rate(g["unaided_rate"]), "自力回答数": g["unaided_count"],
+                   "ヒントあり正答率": rate(g["assisted_rate"]), "ヒントあり回答数": g["assisted_count"],
+                   "ヒント記録不明": g["hint_unknown_count"],
                    "次の練習の目安": g["status"]} for g in report["groups"]],
                  hide_index=True, width="stretch")
     st.caption("文章題の各段階は重複する回答です。未評価の項目は分母から除きます。"
                "国語読解は自力読みのみ。5問未満は判断保留、5問以上で80%未満なら練習を提案します。")
+    st.caption("ヒント使用率は使用の有無を記録できた回答のみで計算します。"
+               "以前の履歴など、記録が不明な回答は自力にもヒントありにも含めません。"
+               "自力正答率はヒントなしの回答、ヒントあり正答率はヒントを使った回答で計算します。"
+               "ヒントを使うことも学習の一部です。国語の自力読み（音声なし）とヒントなしは別の条件です。")
     st.info("文章題と国語読解の結果を並べて、練習内容を選ぶ参考にします。"
             "誤答の原因や教科間の因果関係を断定する分析ではありません。")
     st.write("**次に取り組むこと**")

@@ -4,6 +4,7 @@ from statistics import median
 import random
 
 from learning import make_problem
+from hint_metrics import summarize_hints
 
 
 def category(record):
@@ -24,7 +25,8 @@ def summarize(records):
     times = [row["response_time_sec"] for row in records if row["is_correct"]]
     return {"count": len(records), "correct": correct,
             "rate": correct / len(records) if records else None,
-            "seconds": median(times) if times else None}
+            "seconds": median(times) if times else None,
+            **summarize_hints(records, correct_field="is_correct")}
 
 
 def assess(records):
@@ -48,6 +50,10 @@ def assess(records):
             group["status"] = "もう少し練習"
         else:
             group["status"] = "優先して練習"
+        group["hint_support"] = (group["hint_known_count"] >= 5
+                                 and group["hint_rate"] >= .3)
+        group["support_message"] = ("ヒントが理解を支えています。ヒントで考え方を確認し、慣れたら自力でも試しましょう。"
+                                    if group["hint_support"] else "")
         group["trend"] = "比較する回答がまだ足りません（20問から）"
         if len(rows) >= 20:
             recent = summarize(rows[-10:])["rate"]
@@ -58,6 +64,9 @@ def assess(records):
     eligible = [group for group in groups if group["count"] >= 5]
     weak = [group for group in eligible if group["rate"] < .8]
     target = min(weak, key=lambda group: (group["rate"], -group["count"])) if weak else None
+    supported = [group for group in groups if group["hint_support"]]
+    if target is None and supported:
+        target = max(supported, key=lambda group: (group["hint_rate"], group["hint_known_count"]))
     strengths = [group["label"] for group in eligible if group["rate"] >= .9]
     if not normal:
         message = "初回の回答がまだありません。まず10問練習してみましょう。"
@@ -69,6 +78,8 @@ def assess(records):
         message = "5問以上回答した種類は、初回正答率がすべて80%以上です。ミックスで練習を続けましょう。"
     else:
         message = "種類ごとの回答がまだ少ないため、得意・苦手の判断は保留しています。練習を続けましょう。"
+    if target and target["hint_support"]:
+        message += " ヒントが考え方の支えになっています。必要なときはヒントを使い、慣れたら同じ種類を自力でも試しましょう。"
     return {"overall": summarize(normal), "retry": summarize(retries), "groups": groups,
             "strengths": strengths, "message": message,
             "target": target["key"] if target else None,

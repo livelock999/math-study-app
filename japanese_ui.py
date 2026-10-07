@@ -257,7 +257,8 @@ def history():
               "分野": CATEGORIES[r["category"]], "スキルタグ": "・".join(r["skill_tags"]),
               "質問タイプ": QUESTION_LABELS[r["question_word"]], "難易度": r["difficulty"],
               "思考レベル": r["reasoning_level"], "回答時間（秒）": r["response_time_sec"],
-              "回答回数": r["attempt_count"], "ヒント": "あり" if r["hint_used"] else "なし",
+              "回答回数": r["attempt_count"],
+              "ヒント": "記録なし" if r.get("hint_used") is None else "あり" if r["hint_used"] else "なし",
               "読み方": "自力読み" if r["reading_mode"] == "self_read" else "読み上げ",
               "再回答": "あり" if r["retry_flag"] else "なし",
               "最終正誤（現在まで）": "○" if latest_chain[r["chain_id"]]["correct"] else "×",
@@ -315,6 +316,11 @@ def analysis():
              if summary["count"] else "この集計には初回の回答がありません。")
     st.write(f"再回答成功：{summary['retry_success']} / {summary['retry_count']}問 ／ "
              f"現在までの最終正解：{summary['eventual_correct']} / {summary['chains']}問")
+    st.write(f"初回・ヒントなしの正答率：{percent(summary['unaided_rate'])}（{summary['unaided_count']}問） ／ "
+             f"ヒントありの正答率：{percent(summary['assisted_rate'])}（{summary['assisted_count']}問）")
+    st.caption(f"ヒント使用率は記録のある初回回答{summary['hint_known_count']}問が対象です。"
+               f"記録なし：{summary['hint_unknown_count']}問。ヒントを使った正解も正解として数えます。"
+               "問題の違いもあるため、2つの正答率の差だけでヒントの効果は判断しません。")
     from particles_ui import show_report
     show_report([r for r in records if r["reading_mode"] == mode])
     for title, key in [("分野別", "category"), ("スキルタグ別", "tags"), ("質問タイプ別", "question_word"),
@@ -322,7 +328,10 @@ def analysis():
         st.write(f"**{title}**")
         table = [{"分類": g["label"], "初回回答数": g["count"], "初回正答率": percent(g["rate"]),
                   "平均時間（秒）": round(g["seconds"], 1) if g["seconds"] is not None else None,
-                  "ヒント率": percent(g["hint_rate"]), "再回答成功": f"{g['retry_success']}/{g['retry_count']}",
+                  "ヒント率": percent(g["hint_rate"]),
+                  "ヒントなし正答率": percent(g["unaided_rate"]), "ヒントなし回答数": g["unaided_count"],
+                  "ヒントあり正答率": percent(g["assisted_rate"]), "ヒントあり回答数": g["assisted_count"],
+                  "ヒント記録なし": g["hint_unknown_count"], "再回答成功": f"{g['retry_success']}/{g['retry_count']}",
                   "評価": g["status"], "気になる傾向": "・".join(g["signals"])} for g in report[key]]
         if table:
             st.dataframe(table, hide_index=True, use_container_width=True)
@@ -339,7 +348,7 @@ def analysis():
         st.write("、".join(f"{ERROR_LABELS[tag]}：{count}回" for tag, count in errors.items()))
     with st.expander("評価基準と記録の見方"):
         st.write("5問未満は判断保留。初回正答率90%以上＝◎、80%以上＝○、60%以上＝△、60%未満＝×。"
-                 "初回のヒント使用率30%以上、同じ誤答タグ3回以上、正解時の平均時間が本人の全体平均の1.5倍かつ30秒を超える"
+                 "ヒント記録のある初回回答5問以上で使用率30%以上、同じ誤答タグ3回以上、正解時の平均時間が本人の全体平均の1.5倍かつ30秒を超える"
                  "（正解5問以上）場合は、◎・○でも△にします。時間だけで×にはしません。")
         st.write("再回答は初回正答率と分け、説明後の成功を表示します。最終正誤は同じ問題の初回から続く"
                  "再練習の最新結果です。誤答原因は選択肢に基づく可能性で、読めない・ケアレスミス等は断定しません。"
