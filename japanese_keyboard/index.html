@@ -20,6 +20,7 @@
     .help, .explanation { font-size: 17px; line-height: 1.7; }
     .order { font-size: 21px; line-height: 1.8; min-height: 40px; }
     .hint { font-size: 20px; line-height: 1.7; background: #fff5d6; padding: 12px; }
+    ruby rt { font-size: .48em; color: inherit; opacity: .8; font-weight: 400; }
   </style>
 </head>
 <body><div id="root"></div>
@@ -29,6 +30,27 @@ let token = null, questionId = null, shownAt = 0, phase = null;
 let pending = false, hintUsed = false, order = [], choices = [], form = null;
 let chooseOption = null, nextAction = null, redrawOrder = null, eventNumber = 0;
 let elapsedBefore = 0, resumeToken = null;
+let furigana = {};
+function renderText(element, value) {
+  const text = value == null ? '' : String(value);
+  const entries = Object.entries(furigana || {})
+    .filter(([word, reading]) => word && typeof reading === 'string' && reading)
+    .sort(([a], [b]) => b.length - a.length);
+  element.replaceChildren();
+  if (element.tagName === 'BUTTON') element.setAttribute('aria-label', text);
+  let plainStart = 0, position = 0;
+  while (position < text.length) {
+    const match = entries.find(([word]) => text.startsWith(word, position));
+    if (!match) { position++; continue; }
+    if (position > plainStart) element.append(document.createTextNode(text.slice(plainStart, position)));
+    const ruby = document.createElement('ruby');
+    const reading = document.createElement('rt'); reading.textContent = match[1];
+    reading.setAttribute('aria-hidden', 'true');
+    ruby.append(document.createTextNode(match[0]), reading); element.append(ruby);
+    position += match[0].length; plainStart = position;
+  }
+  if (plainStart < text.length) element.append(document.createTextNode(text.slice(plainStart)));
+}
 function send(type, extra = {}) { window.parent.postMessage({isStreamlitMessage: true, type, ...extra}, '*'); }
 function resize() { send('streamlit:setFrameHeight', {height: document.body.scrollHeight + 12}); }
 function submit(action, answer = null) {
@@ -40,7 +62,7 @@ function submit(action, answer = null) {
     hint_used: hintUsed, draft_order: [...order]}});
 }
 function element(tag, text, className = '') {
-  const result = document.createElement(tag); result.textContent = text; result.className = className; return result;
+  const result = document.createElement(tag); renderText(result, text); result.className = className; return result;
 }
 function button(text, handler, className = '') {
   const result = element('button', text, className); result.type = 'button'; result.onclick = handler; return result;
@@ -54,7 +76,7 @@ window.addEventListener('message', event => {
     redrawOrder?.();
     return;
   }
-  token = args.token; phase = args.phase; form = args.form; choices = args.choices;
+  token = args.token; phase = args.phase; form = args.form; choices = args.choices; furigana = args.furigana || {};
   if (questionId !== args.question_id || (args.token.includes(':resume') && resumeToken !== args.token)) {
     questionId = args.question_id; resumeToken = args.token;
     hintUsed = args.draft?.hint_used === true; order = [...(args.draft?.order || [])];
@@ -73,7 +95,7 @@ window.addEventListener('message', event => {
       const undo = button('1こ もどす', () => { order.pop(); redrawOrder(); }, 'secondary');
       const clear = button('ならべなおす', () => { order = []; redrawOrder(); }, 'secondary');
       redrawOrder = () => {
-        sequence.textContent = order.length ? order.map(i => choices[i]).join(' → ') : 'えらんだ じゅんばんが ここに でるよ';
+        renderText(sequence, order.length ? order.map(i => choices[i]).join(' → ') : 'えらんだ じゅんばんが ここに でるよ');
         optionButtons.forEach((b, i) => b.disabled = pending || order.includes(i));
         confirm.disabled = pending || order.length !== choices.length;
         undo.disabled = clear.disabled = pending || order.length === 0; resize();
@@ -91,9 +113,9 @@ window.addEventListener('message', event => {
       choices.forEach((choice, i) => card.append(button(`${i + 1}　${choice}`, () => chooseOption(i))));
     }
     const hint = element('p', '', 'hint'); hint.hidden = !hintUsed;
-    if (hintUsed) hint.textContent = args.hint;
+    if (hintUsed) renderText(hint, args.hint);
     const hintButton = button('ヒントを みる', () => {
-      hintUsed = true; hint.textContent = args.hint; hint.hidden = false; resize();
+      hintUsed = true; renderText(hint, args.hint); hint.hidden = false; resize();
     }, 'secondary');
     card.append(hintButton, hint);
     card.append(element('p', form === 'ordering'
