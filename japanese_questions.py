@@ -3,6 +3,7 @@
 CATEGORIES = {
     "words": "ことば", "sentence": "1ぶんを よむ", "information": "だれ・なに・どこ",
     "sequence": "ぶんの じゅんばん", "passage": "みじかい おはなし", "blank": "ぶんの あなうめ",
+    "particles": "てにをは",
 }
 TAG_LABELS = {
     "hiragana": "ひらがな", "vocabulary": "語彙", "antonym": "反対語", "word_group": "仲間の言葉",
@@ -13,7 +14,8 @@ TAG_LABELS = {
 }
 QUESTION_LABELS = {"who": "だれ", "what": "なに", "where": "どこ", "when": "いつ",
                    "action": "どうした", "why": "なぜ", "how": "どんな", "order": "順番",
-                   "reference": "指示語", "match": "内容一致", "word": "ことば", "blank": "穴埋め"}
+                   "reference": "指示語", "match": "内容一致", "word": "ことば", "blank": "穴埋め",
+                   "particle": "助詞の使い分け"}
 ERROR_LABELS = {
     "word_meaning": "言葉の意味の取り違えの可能性", "character": "文字の取り違えの可能性",
     "question_meaning": "質問語の取り違えの可能性", "find_answer": "文中の情報の取り違えの可能性",
@@ -184,3 +186,5 @@ def build_questions():
 
 
 QUESTIONS = build_questions()
+from particles import QUESTIONS as PARTICLE_QUESTIONS
+QUESTIONS += PARTICLE_QUESTIONS

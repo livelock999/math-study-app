@@ -439,13 +439,19 @@ class AppFlowTests(unittest.TestCase):
         self.app.button(key=user_key).click().run()
         self.click_label("れんしゅう スタート")
 
-    def event(self, action, answer=None, selected_operation=None, equation_left=None, equation_right=None):
+    def event(self, action, answer=None, selected_operation=None, equation_left=None, equation_right=None,
+              seconds=1.25, draft=None):
         state = self.app.session_state.round
         token = f"{state['session_id']}:{state['index']}:{state['phase']}"
         revision = state.get("equation_revision", {}).get(state["index"], 0)
         if revision:
             token += f":edit{revision}"
-        event = {"token": token, "action": action, "answer": answer, "response_time_sec": 1.25}
+        interaction_revision = state.get("interaction_revision", {}).get(state["index"], 0)
+        if interaction_revision:
+            token += f":ui{interaction_revision}"
+        event = {"token": token, "action": action, "answer": answer, "response_time_sec": seconds}
+        if draft is not None:
+            event["draft"] = draft
         if selected_operation is not None:
             event["selected_operation"] = selected_operation
         if equation_left is not None:
@@ -461,6 +467,13 @@ class AppFlowTests(unittest.TestCase):
         with closing(sqlite3.connect(self.path)) as db:
             db.row_factory = sqlite3.Row
             return [dict(row) for row in db.execute("SELECT * FROM attempts ORDER BY rowid")]
+
+    def assert_round_preserved(self, before):
+        """画面往復で更新する下書き・時刻以外の学習記録を保持しているか。"""
+        navigation_fields = {"drafts", "interaction_revision", "suspended"}
+        current = {key: value for key, value in self.app.session_state.round.items() if key not in navigation_fields}
+        expected = {key: value for key, value in before.items() if key not in navigation_fields}
+        self.assertEqual(current, expected)
 
     def test_full_round_retry_and_user_switch_keep_separate_records(self):
         self.start()
@@ -577,7 +590,7 @@ class AppFlowTests(unittest.TestCase):
     def test_report_failure_reload_and_return_preserve_active_round(self):
         self.start()
         before = deepcopy(self.app.session_state.round)
-        self.app.button(key="history_practice").click().run()
+        self.event("open_history")
         self.app.button(key="report_history").click().run()
         self.assertEqual(len(self.app.exception), 0)
         self.read_mock.side_effect = OSError("private_database_error")
@@ -590,7 +603,7 @@ class AppFlowTests(unittest.TestCase):
         self.app.button(key="report_back").click().run()
         self.assertEqual(self.app.session_state.screen, "history")
         self.app.button(key="history_back").click().run()
-        self.assertEqual(self.app.session_state.round, before)
+        self.assert_round_preserved(before)
 
     def test_report_uses_up_to_500_answers_across_history_pages(self):
         record = make_attempt(make_problem("addition", 10, 2, 3), "user_001", "sample",
@@ -657,22 +670,22 @@ class AppFlowTests(unittest.TestCase):
     def test_history_during_practice_preserves_question_and_feedback_without_duplicate_save(self):
         self.start()
         before = deepcopy(self.app.session_state.round)
-        self.app.button(key="history_practice").click().run()
+        self.event("open_history")
         self.assertEqual(self.app.session_state.screen, "history")
         self.app.button(key="history_back").click().run()
         self.assertEqual(self.app.session_state.screen, "practice")
-        self.assertEqual(self.app.session_state.round, before)
+        self.assert_round_preserved(before)
         self.assertEqual(self.rows(), [])
         answer_event = self.event("answer", before["problems"][0]["correct_answer"])
         feedback = deepcopy(self.app.session_state.round)
-        self.app.button(key="history_practice").click().run()
+        self.event("open_history")
         self.app.button(key="history_back").click().run()
-        self.assertEqual(self.app.session_state.round, feedback)
+        self.assert_round_preserved(feedback)
         self.assertEqual(len(self.rows()), 1)
 
         self.app.session_state["answer_keyboard"] = answer_event
         self.app.run()
-        self.assertEqual(self.app.session_state.round, feedback)
+        self.assert_round_preserved(feedback)
         self.assertEqual(len(self.rows()), 1)
         self.event("next")
         self.assertEqual(self.app.session_state.round["index"], 1)
@@ -794,12 +807,12 @@ class AppFlowTests(unittest.TestCase):
         args = json.loads(self.app.get("component_instance")[0].proto.json_args)
         self.assertIn("= ?", args["equation"])
         before = deepcopy(self.app.session_state.round)
-        self.app.button(key="history_practice").click().run()
+        self.event("open_history")
         self.app.button(key="history_back").click().run()
-        self.assertEqual(self.app.session_state.round, before)
+        self.assert_round_preserved(before)
         self.app.session_state["answer_keyboard"] = chosen
         self.app.run()
-        self.assertEqual(self.app.session_state.round, before)
+        self.assert_round_preserved(before)
         answered = self.event("answer", problem["correct_answer"])
         self.assertEqual(len(self.rows()), 1)
         self.assertTrue(self.rows()[0]["is_correct"])
@@ -885,7 +898,7 @@ class AppFlowTests(unittest.TestCase):
         self.assertEqual(args["equation_right"], 8)
         self.app.session_state["answer_keyboard"] = submitted
         self.app.run()
-        self.assertEqual(self.app.session_state.round, before)
+        self.assert_round_preserved(before)
         self.assertEqual(self.rows(), [])
         self.event("submit_equation", selected_operation="subtraction", equation_left=13,
                    equation_right=8)
@@ -894,6 +907,74 @@ class AppFlowTests(unittest.TestCase):
         self.assertTrue(self.rows()[0]["equation_correct"])
         self.assertEqual(self.rows()[0]["user_equation"], "13 − 8")
 
+    def test_math_pause_resume_restores_equation_draft_hint_and_elapsed(self):
+        self.start_words()
+        from words import make_word_problem
+
+        self.app.session_state.round["problems"][0] = make_word_problem("decrease", 20, 13, 8)
+        self.app.run()
+        self.event("choose_operation", selected_operation="subtraction")
+        draft = {"answer": "", "equation_left": "12", "equation_right": "8",
+                 "selected_operation": "subtraction"}
+        self.event("show_hint", seconds=3, draft=draft)
+        args = json.loads(self.app.get("component_instance")[0].proto.json_args)
+        self.assertTrue(args["hint_visible"])
+        self.assertTrue(args["hint_used"])
+        self.event("pause", seconds=8, draft=draft)
+        self.assertEqual(self.app.session_state.screen, "settings")
+        self.assertEqual(self.rows(), [])
+        before = deepcopy(self.app.session_state.round)
+        self.app.button(key="math_resume").click().run()
+        self.assert_round_preserved(before)
+        args = json.loads(self.app.get("component_instance")[0].proto.json_args)
+        self.assertEqual(args["draft"]["equation_left"], "12")
+        self.assertEqual(args["draft"]["equation_right"], "8")
+        self.assertEqual(args["elapsed_sec"], 8)
+        self.assertTrue(args["hint_visible"])
+        self.event("submit_equation", selected_operation="subtraction", equation_left=13, equation_right=8,
+                   seconds=10)
+        self.event("answer", 5, seconds=13.5)
+        saved = deepcopy(self.rows())
+        self.assertEqual(saved[0]["hint_used"], 1)
+        self.assertEqual(saved[0]["response_time_sec"], 13.5)
+        self.event("show_explanation", seconds=15)
+        args = json.loads(self.app.get("component_instance")[0].proto.json_args)
+        self.assertTrue(args["explanation_visible"])
+        self.assertIn("13 − 8 = 5", args["explanation_text"])
+        self.assertEqual(self.rows(), saved)
+        self.event("pause", seconds=16)
+        self.app.button(key="math_resume").click().run()
+        self.assertEqual(self.app.session_state.round["phase"], "feedback")
+        self.assertEqual(self.rows(), saved)
+
+    def test_math_paused_round_owner_and_no_hint_remain_separate(self):
+        self.start()
+        answer = self.app.session_state.round["problems"][0]["correct_answer"]
+        self.event("pause", seconds=2, draft={"answer": str(answer), "equation_left": "",
+                                              "equation_right": "", "selected_operation": None})
+        self.assertTrue(any(button.key == "math_resume" for button in self.app.button))
+        self.click_label("なまえを かえる")
+        self.app.button(key="select_user_002").click().run()
+        self.assertFalse(any(button.key == "math_resume" for button in self.app.button))
+        self.click_label("なまえを かえる")
+        self.app.button(key="select_user_001").click().run()
+        self.app.button(key="math_resume").click().run()
+        args = json.loads(self.app.get("component_instance")[0].proto.json_args)
+        self.assertEqual(args["draft"]["answer"], str(answer))
+        self.assertFalse(args["hint_used"])
+        self.save_mock.side_effect = OSError("temporary_failure")
+        self.event("answer", answer, seconds=4)
+        pending = deepcopy(self.app.session_state.round["pending_record"])
+        self.assertFalse(pending["hint_used"])
+        self.assertEqual(len(self.app.get("component_instance")), 0)
+        self.assertEqual(self.rows(), [])
+        self.save_mock.side_effect = self.save_record
+        self.app.button(key="retry_save").click().run()
+        self.assertEqual(self.rows()[0]["attempt_id"], pending["attempt_id"])
+        self.assertEqual(self.rows()[0]["hint_used"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()
+
+

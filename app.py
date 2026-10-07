@@ -13,6 +13,7 @@ from learning import (USERS, generate_problems, init_db, make_attempt, new_id,
                       read_attempts, read_month_attempts, save_attempt, selection_error)
 from assessment import assess, recommended_problems
 from activity import JST, month_summary
+from words import guidance
 
 st.set_page_config(page_title="さんすう・こくご れんしゅう", page_icon="📚", layout="centered")
 keyboard = components.declare_component("math_keyboard", path=str(Path(__file__).parent / "keyboard"))
@@ -27,6 +28,7 @@ def start_round(problems, selection_type):
         "selection_type": selection_type, "index": 0, "answers": [],
         "phase": "choose" if problems[0]["problem_format"] == "word_problem" else "question",
         "pending_record": None, "selected_operations": {}, "user_equations": {}, "equation_revision": {},
+        "user_id": st.session_state.user_id, "suspended": False, "drafts": {}, "interaction_revision": {},
     }
     st.session_state.screen = "practice"
 
@@ -59,6 +61,14 @@ def user_screen():
 
 def settings_screen():
     st.subheader(f"{USERS[st.session_state.user_id]}、なにを れんしゅうする？")
+    previous_round = st.session_state.get("round")
+    if (previous_round and previous_round.get("suspended")
+            and previous_round.get("user_id") == st.session_state.user_id):
+        if st.button("つづきから", key="math_resume", type="primary", use_container_width=True):
+            previous_round["suspended"] = False
+            st.session_state.screen = "practice"
+            st.rerun()
+        st.caption("スタートを押すとあたらしく始めます。これまで保存した回答は残ります。")
     modes = {"addition": "たしざん", "subtraction": "ひきざん", "mix": "ミックス"}
     mode = st.radio("もんだい", list(modes), format_func=modes.get, horizontal=True)
     limit = st.radio("かずの はんい", [10, 20], format_func=lambda n: f"{n}まで", horizontal=True)
@@ -90,8 +100,35 @@ def settings_screen():
 
 
 
+def remember_practice_draft(state, index, event):
+    """途中入力と、実際に問題画面で過ごした時間だけを引き継ぎます。"""
+    draft = state["drafts"][index]
+    incoming = event.get("draft", {})
+    if not isinstance(incoming, dict):
+        return False
+    for name, max_length in (("answer", 3), ("equation_left", 2), ("equation_right", 2)):
+        value = incoming.get(name, draft[name])
+        if not isinstance(value, str) or len(value) > max_length or (value and not (value.isascii() and value.isdigit())):
+            return False
+    choice = incoming.get("selected_operation", draft["selected_operation"])
+    if choice not in (None, "addition", "subtraction"):
+        return False
+    seconds = event.get("response_time_sec", draft["elapsed_sec"])
+    if type(seconds) not in (int, float) or not 0 <= seconds < float("inf"):
+        return False
+    for name in ("answer", "equation_left", "equation_right"):
+        draft[name] = incoming.get(name, draft[name])
+    draft["selected_operation"] = choice
+    draft["elapsed_sec"] = max(draft["elapsed_sec"], seconds)
+    return True
+
+
 def practice_screen():
     state = st.session_state.round
+    state.setdefault("user_id", st.session_state.user_id)
+    if state["user_id"] != st.session_state.user_id:
+        st.session_state.screen = "settings"
+        st.rerun()
     index = state["index"]
     problems = state["problems"]
     problem = problems[index]
@@ -99,6 +136,11 @@ def practice_screen():
     selected_operation = state.setdefault("selected_operations", {}).get(index)
     equation = state.setdefault("user_equations", {}).get(index)
     revision = state.setdefault("equation_revision", {}).get(index, 0)
+    draft = state.setdefault("drafts", {}).setdefault(index, {
+        "answer": "", "equation_left": "", "equation_right": "", "selected_operation": None,
+        "elapsed_sec": 0, "hint_used": False, "hint_visible": False, "explanation_visible": False,
+    })
+    interaction_revision = state.setdefault("interaction_revision", {}).get(index, 0)
     st.caption(f"{USERS[st.session_state.user_id]} ／ "
                f"{'もういちど れんしゅう' if state['selection_type'] == 'retry' else 'れんしゅう'}")
     st.progress(index / len(problems), text=f"{index + 1} / {len(problems)} もん")
@@ -109,6 +151,7 @@ def practice_screen():
         if state["pending_record"].get("user_equation"):
             st.write(f"じぶんの しき：{state['pending_record']['user_equation']}")
         st.error("きろくを ほぞんできませんでした。もういちど ボタンを おしてね。")
+        st.caption("回答を保存してから戻れます。いまの回答はそのまま残しています。")
         if st.button("ほぞんを やりなおす", key="retry_save", type="primary"):
             if save_pending_answer(state):
                 st.rerun()
@@ -120,6 +163,8 @@ def practice_screen():
     token = f"{state['session_id']}:{index}:{state['phase']}"
     if is_word and revision:
         token += f":edit{revision}"
+    if interaction_revision:
+        token += f":ui{interaction_revision}"
     last_answer = state["answers"][-1] if state["phase"] == "feedback" else None
     event = keyboard(
         token=token, phase=state["phase"], question=problem["question_text"],
@@ -132,13 +177,35 @@ def practice_screen():
         selected_operation=selected_operation,
         equation_left=equation["left"] if equation else None,
         equation_right=equation["right"] if equation else None,
+        draft=draft, elapsed_sec=draft["elapsed_sec"], hint_used=draft["hint_used"],
+        hint_visible=draft["hint_visible"], explanation_visible=draft["explanation_visible"],
+        hint_text=guidance(problem),
+        explanation_text=guidance(problem, reveal=True) if state["phase"] == "feedback" else None,
     )
-    if st.button("学習履歴", key="history_practice", use_container_width=True):
-        open_history("practice")
     # 古い画面から届いた値は無視し、保存後にだけ進行状態を変えます。
     if not isinstance(event, dict) or event.get("token") != token:
         return
-    if state["phase"] == "choose" and event.get("action") == "choose_operation":
+    if not remember_practice_draft(state, index, event):
+        return
+    action = event.get("action")
+    if action in ("pause", "open_history", "show_hint", "show_explanation"):
+        if action == "show_hint" and state["phase"] != "feedback":
+            draft["hint_used"] = True
+            draft["hint_visible"] = True
+        elif action == "show_explanation" and state["phase"] == "feedback":
+            draft["explanation_visible"] = True
+        elif action == "pause":
+            state["suspended"] = True
+            st.session_state.screen = "settings"
+        elif action == "open_history":
+            st.session_state.history_return = "practice"
+            st.session_state.history_page = 0
+            st.session_state.screen = "history"
+        else:
+            return
+        state["interaction_revision"][index] = interaction_revision + 1
+        st.rerun()
+    elif state["phase"] == "choose" and action == "choose_operation":
         choice = event.get("selected_operation")
         if is_word and choice in ("addition", "subtraction"):
             state["selected_operations"][index] = choice
@@ -177,6 +244,7 @@ def practice_screen():
             selected_operation=selected_operation,
             equation_left=equation["left"] if is_word else None,
             equation_right=equation["right"] if is_word else None,
+            hint_used=draft["hint_used"],
         )
         save_pending_answer(state)
         st.rerun()

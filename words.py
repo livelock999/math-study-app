@@ -38,3 +38,27 @@ def word_pool(operation, limit, special="auto"):
                 continue
             problems.append(make_word_problem(story_type, limit, left, right))
     return problems
+
+
+def guidance(problem, reveal=False):
+    """回答前は考える手がかりだけ、回答後は正しい式と答えも返します。"""
+    hints = {
+        "increase": "はじめの かずから、もらった ぶんだけ ふえるよ。",
+        "decrease": "はじめに あった ものから、たべた ものを とりのぞいて みよう。",
+        "combine": "あかと あおを ひとつに まとめて かぞえて みよう。",
+        "separate": "ぜんぶの なかから いぬを のぞくと、ねこが のこるよ。",
+        "compare": "りんごと みかんを 1こずつ くみにして、あまる かずを かんがえよう。",
+        "difference": "こどもと いすを 1つずつ くみにして、いすの ない こどもの かずを かんがえよう。",
+    }
+    if problem["problem_format"] == "word_problem":
+        hint = hints[problem["story_type"]]
+    elif problem["operation"] == "addition":
+        hint = ("10の まとまりを つくって、のこりの かずを かんがえよう。" if problem["carry"]
+                else "はじめの かずから、もう ひとつの かずだけ すすんで かぞえよう。")
+    else:
+        hint = ("10の まとまりを ばらして、ひく かずを とりのぞこう。" if problem["borrowing"]
+                else "はじめの かずから、ひく かずだけ もどって かぞえよう。")
+    if reveal:
+        sign = "+" if problem["operation"] == "addition" else "−"
+        hint += f" ただしい しきは {problem['left_operand']} {sign} {problem['right_operand']} = {problem['correct_answer']} だよ。"
+    return hint

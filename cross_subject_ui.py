@@ -55,6 +55,8 @@ def report_screen():
     st.write("**次に取り組むこと**")
     for suggestion in report["suggestions"]:
         st.write("・" + suggestion)
+    from particles_ui import show_report
+    show_report(report["particle_records"])
     math_button, japanese_button = st.columns(2)
     if math_button.button("算数の練習設定へ", key="cross_math", width="stretch"):
         st.session_state.screen = "settings"

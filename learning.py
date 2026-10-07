@@ -185,7 +185,9 @@ def init_db(path=None):
 
 
 def make_attempt(problem, user_id, session_id, order, selection, answer, seconds, count,
-                 round_size=None, selected_operation=None, equation_left=None, equation_right=None):
+                 round_size=None, selected_operation=None, equation_left=None, equation_right=None, hint_used=False):
+    if type(hint_used) is not bool:
+        raise ValueError("ヒントの使用状態が不正です。")
     if round_size is not None and (type(round_size) is not int or round_size < 1 or not 1 <= order <= round_size):
         raise ValueError("セットの問題数または出題順が不正です")
     is_word = problem["problem_format"] == "word_problem"
@@ -220,7 +222,7 @@ def make_attempt(problem, user_id, session_id, order, selection, answer, seconds
         user_equation=user_equation,
         calculation_correct=calculation_correct,
         response_time_sec=round(max(0, seconds), 3), attempt_count=count,
-        hint_used=False, dont_know_used=False, retry_flag=selection == "retry",
+        hint_used=hint_used, dont_know_used=False, retry_flag=selection == "retry",
         round_size=round_size, round_completed=(order == round_size) if round_size is not None else None,
     )
     return record

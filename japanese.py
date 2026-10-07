@@ -20,9 +20,14 @@ JST = timezone(timedelta(hours=9))
 DB_PATH = Path(__file__).parent / "data" / "japanese.sqlite3"
 
 
-def choose_questions(category="mix", count=10, weak_categories=None):
+def choose_questions(category="mix", count=10, weak_categories=None, particle_level=None, records=None):
     if category not in (*CATEGORIES, "mix") or count not in (5, 10):
         raise ValueError("国語の出題設定が不正です。")
+    if particle_level not in (None, 1, 2, 3):
+        raise ValueError("てにをはのレベルが不正です。")
+    if category == "particles" or weak_categories == ["particles"]:
+        from particles import recommended
+        return recommended(records or [], count, particle_level)
     pool = [q for q in QUESTIONS if category == "mix" or q["category"] == category]
     if weak_categories:
         preferred = [q for q in pool if q["category"] in weak_categories]
@@ -46,7 +51,7 @@ def answer_text(question, answer):
 
 
 def make_record(question, user_id, session_id, order, selection, answer, seconds, attempt_count,
-                chain_id, hint_used=False, reading_mode="self_read"):
+                chain_id, hint_used=False, reading_mode="self_read", first_try_correct=None):
     if user_id not in learning.USERS or not validate_answer(question, answer):
         raise ValueError("学習者または回答が不正です。")
     if (type(seconds) not in (int, float) or not math.isfinite(seconds) or seconds < 0
@@ -55,7 +60,7 @@ def make_record(question, user_id, session_id, order, selection, answer, seconds
         raise ValueError("回答の記録が不正です。")
     correct = answer == question["answer"]
     error_key = "ordering" if question["problem_format"] == "ordering" else str(answer)
-    return {**question, "attempt_id": learning.new_id("jp_attempt"), "user_id": user_id,
+    record = {**question, "attempt_id": learning.new_id("jp_attempt"), "user_id": user_id,
             "session_id": session_id, "chain_id": chain_id, "question_order": order,
             "selection_type": selection, "selected_answer": answer,
             "selected_answer_text": answer_text(question, answer), "correct": correct,
@@ -64,6 +69,18 @@ def make_record(question, user_id, session_id, order, selection, answer, seconds
             "retry_flag": selection == "retry", "final_correct": correct,
             "error_cause_tags": [] if correct else question["error_tags"].get(error_key, []),
             "review_due_at": None if correct else (datetime.now(JST) + timedelta(days=1)).isoformat()}
+    if question["category"] == "particles":
+        from particles import confusion_pair
+        if attempt_count > 1 and type(first_try_correct) is not bool:
+            raise ValueError("再回答の初回正誤が不明です。")
+        record.update(learner_id=user_id, answered_at=record["datetime"],
+                      selected_answer=record["selected_answer_text"], selected_answer_index=answer,
+                      correct_answer=question["correct_answer"], is_correct=correct,
+                      first_try_correct=correct if attempt_count == 1 else first_try_correct,
+                      response_time=record["response_time_sec"], retry_count=attempt_count - 1,
+                      confusion_pair=confusion_pair(question["correct_answer"], record["selected_answer_text"]),
+                      expected_confusion_pair=question["confusion_pair"])
+    return record
 
 
 def init_db(path=None):
@@ -221,7 +238,7 @@ def analyze(records, now=None, reading_mode="self_read"):
     groups = {
         "category": grouped("category", CATEGORIES), "tags": grouped("skill_tags", TAG_LABELS, True),
         "question_word": grouped("question_word", QUESTION_LABELS),
-        "difficulty": grouped("difficulty", {1: "1（やさしい）", 2: "2（少し考える）"}),
+        "difficulty": grouped("difficulty", {1: "1（やさしい）", 2: "2（少し考える）", 3: "3（くらべる）"}),
         "reasoning": grouped("reasoning_level", {1: "1：直接書いてある", 2: "2：情報を探す",
                                               3: "3：文をつなげる", 4: "4：推測する"}),
     }

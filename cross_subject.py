@@ -73,6 +73,11 @@ def build_report(math_records, japanese_records, user_id, days=30, now=None):
         evaluated = [{"correct": bool(r["source"][field])} for r in words if r["source"].get(field) is not None]
         groups.append({"label": label, **summarize(evaluated)})
     groups.append({"label": "国語：自力読みの読解（1文・情報抽出・短文）", **summarize(reading)})
+    particle_records = [r["source"] for r in selected["japanese"] if r["source"]["category"] == "particles"
+                        and r["source"]["reading_mode"] == "self_read"]
+    particles = [r for r in jp_initial if r["source"]["category"] == "particles"
+                 and r["source"]["reading_mode"] == "self_read"]
+    groups.append({"label": "国語：てにをは（助詞）", **summarize(particles)})
     suggestions = []
     for group in groups:
         group["status"] = ("判断保留（5問未満）" if group["count"] < 5 else
@@ -85,9 +90,12 @@ def build_report(math_records, japanese_records, user_id, days=30, now=None):
         suggestions.append("文章題で自分が作った式の計算を、1問ずつ確認しましょう。")
     if groups[5]["count"] >= 5 and groups[5]["rate"] < .8:
         suggestions.append("国語の1文読解・だれ／なに／どこ・短文読解から5問練習しましょう。")
+    if groups[6]["count"] >= 5 and groups[6]["rate"] < .8:
+        suggestions.append("てにをはで、行き先の「に」と動作する場所の「で」などを比べて練習しましょう。")
     if not suggestions:
         suggestions.append("5問未満の項目は回答を増やし、5問以上の項目は今の練習を続けましょう。")
     dates = [r["at"] for rows in selected.values() for r in rows]
     return {"subjects": subjects, "daily": daily, "groups": groups, "suggestions": suggestions,
             "total": len(dates), "days": len(daily), "start": start, "end": now,
+            "particle_records": particle_records,
             "first": min(dates) if dates else None, "last": max(dates) if dates else None}

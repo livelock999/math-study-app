@@ -3,6 +3,7 @@
 from pathlib import Path
 from datetime import datetime
 import sqlite3
+import math
 import streamlit as st
 import streamlit.components.v1 as components
 
@@ -36,10 +37,12 @@ def initialize():
 def start(questions, selection="normal"):
     if selection != "retry":
         st.session_state.jp_counts = {}
+        st.session_state.jp_first_correct = {}
         st.session_state.jp_chains = {q["question_id"]: learning.new_id("jp_chain") for q in questions}
     st.session_state.jp_round = {"session_id": learning.new_id("jp_session"), "questions": questions,
                                  "selection": selection, "index": 0, "answers": [], "phase": "question",
-                                 "pending": None}
+                                 "pending": None, "user_id": st.session_state.user_id,
+                                 "paused": False, "resume_revision": 0, "draft": {}}
     goto("jp_practice")
 
 
@@ -64,18 +67,32 @@ def navigation(origin):
 def settings():
     initialize()
     st.subheader(f"{learning.USERS[st.session_state.user_id]}、こくごを れんしゅうしよう")
+    paused = st.session_state.get("jp_round")
+    if paused and paused.get("paused") and paused.get("user_id") == st.session_state.user_id:
+        st.caption("とちゅうの れんしゅうが あるよ。あたらしく はじめても、ほぞんした こたえは のこります。")
+        if st.button("つづきから", key="jp_resume", type="primary", use_container_width=True):
+            paused["paused"] = False
+            goto("jp_practice")
     categories = {"mix": "おまかせ", **CATEGORIES}
     category = st.radio("れんしゅうする こと", list(categories), format_func=categories.get, key="jp_category")
+    particle_level = None
+    if category == "particles":
+        from particles import LEVELS
+        particle_level = st.radio("てにをはの レベル", [None, 1, 2, 3],
+                                  format_func=lambda n: "おまかせ" if n is None else LEVELS[n], key="jp_particle_level")
     count = st.radio("もんだいの かず", [5, 10], index=1, format_func=lambda n: f"{n}もん",
                      horizontal=True, key="jp_count")
     if st.button("こくご スタート", key="jp_start", type="primary", use_container_width=True):
-        start(jp.choose_questions(category, count))
+        start(jp.choose_questions(category, count, particle_level=particle_level))
     if st.button("にがてを れんしゅう", key="jp_weak", use_container_width=True):
         records = load()
         if records is not None:
+            from particles import analyze as analyze_particles
+            if category == "particles" or analyze_particles(records)["priority_pairs"]:
+                start(jp.choose_questions("particles", count, particle_level=particle_level, records=records), "weak_area")
             report = jp.analyze(records)
             if report["weak_categories"]:
-                start(jp.choose_questions("mix", count, report["weak_categories"]), "weak_area")
+                start(jp.choose_questions("mix", count, report["weak_categories"], records=records), "weak_area")
             else:
                 st.info("まだ にがてが みつかっていないよ。おまかせで れんしゅうしてね。")
     if st.button("まちがえた もんだいを れんしゅう", key="jp_past_mistakes", use_container_width=True):
@@ -89,6 +106,7 @@ def settings():
                 wrong = wrong[:count]
                 st.session_state.jp_counts = {r["question_id"]: r["attempt_count"] for r in wrong}
                 st.session_state.jp_chains = {r["question_id"]: r["chain_id"] for r in wrong}
+                st.session_state.jp_first_correct = {r["question_id"]: r.get("first_try_correct", r["correct"]) for r in wrong}
                 start([snapshot(r) for r in wrong], "retry")
             else:
                 st.info("いまは まちがえた もんだいが ないよ。")
@@ -103,7 +121,13 @@ def snapshot(record):
     fields = ("question_id", "category", "problem_format", "text", "question", "choices", "answer",
               "skill_tags", "question_word", "reasoning_level", "difficulty", "hint", "explanation",
               "error_tags", "version")
-    return {key: record[key] for key in fields}
+    question = {key: record[key] for key in fields}
+    if record["category"] == "particles":
+        for key in ("question_type", "level", "sentence", "correct_answer", "target_particle",
+                    "semantic_role", "verb", "noun", "comparison_id"):
+            question[key] = record[key]
+        question["confusion_pair"] = record["expected_confusion_pair"]
+    return question
 
 
 def save_pending(state):
@@ -114,6 +138,8 @@ def save_pending(state):
     record = state["pending"]
     state["answers"].append(record)
     st.session_state.jp_counts[record["question_id"]] = record["attempt_count"]
+    if record["attempt_count"] == 1:
+        st.session_state.setdefault("jp_first_correct", {})[record["question_id"]] = record["correct"]
     state["pending"] = None
     state["phase"] = "feedback"
     return True
@@ -135,6 +161,8 @@ def practice():
                 st.rerun()
         return
     token = f"{state['session_id']}:{index}:{state['phase']}"
+    if state.get("resume_revision", 0):
+        token += f":resume{state['resume_revision']}"
     previous = state["answers"][-1] if state["phase"] == "feedback" else None
     event = keyboard(token=token, question_id=f"{state['session_id']}:{index}", phase=state["phase"],
                      text=question["text"], question=question["question"], choices=question["choices"],
@@ -143,18 +171,33 @@ def practice():
                      selected=previous["selected_answer_text"] if previous else None,
                      correct_answer=jp.answer_text(question, question["answer"]) if previous else None,
                      explanation=question["explanation"] if previous else None,
-                     last=index + 1 == len(state["questions"]), key="jp_keyboard", default=None)
+                     last=index + 1 == len(state["questions"]), key="jp_keyboard", default=None,
+                     draft=state.get("draft", {}))
     # 問題中にiframeを破棄するとヒントと計測開始が消えるため、移動は回答保存後に限ります。
     if state["phase"] == "feedback":
         navigation("jp_practice")
     if not isinstance(event, dict) or event.get("token") != token:
         return
+    if event.get("action") == "back":
+        seconds = event.get("response_time_sec")
+        order = event.get("draft_order", [])
+        if (type(seconds) not in (int, float) or not math.isfinite(seconds) or seconds < 0
+                or type(event.get("hint_used")) is not bool or not isinstance(order, list)
+                or any(type(i) is not int or not 0 <= i < len(question["choices"]) for i in order)
+                or len(order) != len(set(order))):
+            return
+        state["draft"] = {"order": order, "hint_used": event["hint_used"], "elapsed": seconds}
+        state["user_id"] = st.session_state.user_id
+        state["paused"] = True
+        state["resume_revision"] = state.get("resume_revision", 0) + 1
+        goto("jp_settings")
     if state["phase"] == "question" and event.get("action") == "answer":
         try:
             record = jp.make_record(question, st.session_state.user_id, state["session_id"], index + 1,
                                     state["selection"], event.get("answer"), event.get("response_time_sec"),
                                     st.session_state.jp_counts.get(question["question_id"], 0) + 1,
-                                    st.session_state.jp_chains[question["question_id"]], event.get("hint_used", False))
+                                    st.session_state.jp_chains[question["question_id"]], event.get("hint_used", False),
+                                    first_try_correct=st.session_state.get("jp_first_correct", {}).get(question["question_id"]))
         except (ValueError, TypeError):
             st.error("こたえを たしかめてね。")
             return
@@ -166,6 +209,7 @@ def practice():
             goto("jp_results")
         state["index"] += 1
         state["phase"] = "question"
+        state["draft"] = {}
         st.rerun()
 
 
@@ -220,6 +264,15 @@ def history():
              for r in records[page * 50:(page + 1) * 50]]
     st.caption(f"{page + 1}ページ ／ 全{len(records)}回答。初回の不正解も上書きせず残します。")
     st.dataframe(table, hide_index=True, use_container_width=True)
+    particle_rows = [r for r in records[page * 50:(page + 1) * 50] if r["category"] == "particles"]
+    if particle_rows:
+        from particles import ROLES
+        st.write("**てにをはの回答の内訳**")
+        st.dataframe([{"問題": r["sentence"], "正しい助詞": r["correct_answer"],
+                       "選んだ助詞": r["selected_answer_text"], "初回正解": r.get("first_try_correct"),
+                       "混同": r["confusion_pair"] or "なし", "意味役割": ROLES[r["semantic_role"]],
+                       "レベル": r["level"], "再回答回数": r["retry_count"]} for r in particle_rows],
+                     hide_index=True, use_container_width=True)
     left, right = st.columns(2)
     if left.button("前のページ", key="jp_prev_page", disabled=page == 0):
         st.session_state.jp_history_page -= 1
@@ -261,6 +314,8 @@ def analysis():
              if summary["count"] else "この集計には初回の回答がありません。")
     st.write(f"再回答成功：{summary['retry_success']} / {summary['retry_count']}問 ／ "
              f"現在までの最終正解：{summary['eventual_correct']} / {summary['chains']}問")
+    from particles_ui import show_report
+    show_report([r for r in records if r["reading_mode"] == mode])
     for title, key in [("分野別", "category"), ("スキルタグ別", "tags"), ("質問タイプ別", "question_word"),
                        ("難易度別", "difficulty"), ("思考レベル別", "reasoning")]:
         st.write(f"**{title}**")
@@ -276,7 +331,7 @@ def analysis():
     if report["weak_categories"]:
         st.info("次に練習したい分野：" + "、".join(CATEGORIES[key] for key in report["weak_categories"]))
         if st.button("にがてを れんしゅう", key="jp_analysis_practice", type="primary"):
-            start(jp.choose_questions("mix", 5, report["weak_categories"]), "weak_area")
+            start(jp.choose_questions("mix", 5, report["weak_categories"], records=records), "weak_area")
     errors = summary["error_counts"]
     if errors:
         st.write("**選んだ誤答から分かる傾向**")

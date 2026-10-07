@@ -7,10 +7,35 @@ import tempfile
 import unittest
 
 from learning import COLUMNS, generate_problems, init_db, make_attempt, save_attempt, selection_error
-from words import make_word_problem, word_pool
+from words import make_word_problem, word_pool, guidance
 
 
 class WordTests(unittest.TestCase):
+    def test_hints_do_not_reveal_answer_and_explanations_match_all_six_stories(self):
+        for story in ("increase", "decrease", "combine", "separate", "compare", "difference"):
+            addition = story in ("increase", "combine")
+            problem = make_word_problem(story, 20, 8 if addition else 13, 5 if addition else 8)
+            hint = guidance(problem)
+            self.assertTrue(hint)
+            self.assertNotIn("=", hint)
+            self.assertNotIn(str(problem["correct_answer"]), hint)
+            symbol = "+" if addition else "−"
+            expected = f"{problem['left_operand']} {symbol} {problem['right_operand']} = {problem['correct_answer']}"
+            self.assertIn(expected, guidance(problem, reveal=True))
+
+    def test_hint_usage_is_optional_and_stored_separately_from_correctness(self):
+        problem = make_word_problem("decrease", 20, 13, 8)
+        for used in (False, True):
+            record = make_attempt(problem, "user_001", "hint_test", 1, "normal", 5, 2, 1,
+                                  selected_operation="subtraction", equation_left=13, equation_right=8,
+                                  hint_used=used)
+            self.assertEqual(record["hint_used"], used)
+            self.assertTrue(record["is_correct"])
+        for invalid in (None, 0, 1, "true"):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                make_attempt(problem, "user_001", "hint_test", 1, "normal", 5, 2, 1,
+                             selected_operation="subtraction", hint_used=invalid)
+
     def test_self_written_equation_distinguishes_numbers_operation_and_calculation(self):
         problem = make_word_problem("decrease", 20, 13, 8)
         cases = [

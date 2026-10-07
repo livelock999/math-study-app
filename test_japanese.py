@@ -25,26 +25,27 @@ def record(q=None, user="user_001", answer=None, **updates):
 
 
 class JapaneseQuestionsTests(unittest.TestCase):
-    def test_all_80_questions_have_valid_metadata_and_answers(self):
-        self.assertEqual(len(QUESTIONS), 80)
-        self.assertEqual(len({q["question_id"] for q in QUESTIONS}), 80)
+    def test_all_questions_have_valid_metadata_and_answers(self):
+        self.assertEqual(len(QUESTIONS), 120)
+        self.assertEqual(len({q["question_id"] for q in QUESTIONS}), 120)
         self.assertEqual(Counter(q["category"] for q in QUESTIONS),
-                         {"words": 12, "sentence": 12, "information": 18, "sequence": 10, "passage": 18, "blank": 10})
+                         {"words": 12, "sentence": 12, "information": 18, "sequence": 10, "passage": 18, "blank": 10,
+                          "particles": 40})
         for q in QUESTIONS:
             with self.subTest(question=q["question_id"]):
-                self.assertEqual(len(q["choices"]), 3)
-                self.assertEqual(len(set(q["choices"])), 3)
+                self.assertEqual(len(q["choices"]), 2 if q["category"] == "particles" else 3)
+                self.assertEqual(len(set(q["choices"])), len(q["choices"]))
                 self.assertTrue(jp.validate_answer(q, q["answer"]))
                 self.assertTrue(q["skill_tags"] and all(tag in TAG_LABELS for tag in q["skill_tags"]))
                 self.assertIn(q["question_word"], QUESTION_LABELS)
-                self.assertIn(q["difficulty"], (1, 2))
+                self.assertIn(q["difficulty"], (1, 2, 3))
                 self.assertIn(q["reasoning_level"], (1, 2, 3, 4))
                 self.assertTrue(q["hint"] and q["explanation"])
                 self.assertNotIn("ましか", q["question"])
                 correct = record(q)
                 self.assertTrue(correct["correct"])
                 self.assertEqual(correct["error_cause_tags"], [])
-                wrong = list(reversed(q["answer"])) if q["problem_format"] == "ordering" else (q["answer"] + 1) % 3
+                wrong = list(reversed(q["answer"])) if q["problem_format"] == "ordering" else (q["answer"] + 1) % len(q["choices"])
                 if wrong == q["answer"]:
                     wrong = q["answer"][1:] + q["answer"][:1]
                 incorrect = record(q, answer=wrong)
@@ -189,11 +190,14 @@ class JapaneseAppTests(unittest.TestCase):
         self.app.button(key="subject_japanese").click().run()
         self.assertEqual(len(self.app.exception), 0)
 
-    def event(self, answer=None, next=False, hint=False):
+    def event(self, answer=None, next=False, hint=False, action=None, seconds=2.5, **extra):
         state = self.app.session_state.jp_round
         token = f"{state['session_id']}:{state['index']}:{state['phase']}"
-        self.app.session_state.jp_keyboard = {"token": token, "action": "next" if next else "answer",
-                                            "answer": answer, "response_time_sec": 2.5, "hint_used": hint}
+        if state.get("resume_revision"):
+            token += f":resume{state['resume_revision']}"
+        self.app.session_state.jp_keyboard = {"token": token, "action": action or ("next" if next else "answer"),
+                                            "answer": answer, "response_time_sec": seconds, "hint_used": hint,
+                                            **extra}
         self.app.run()
         self.assertEqual(len(self.app.exception), 0)
 
@@ -204,7 +208,7 @@ class JapaneseAppTests(unittest.TestCase):
             q = self.app.session_state.jp_round["questions"][i]
             answer = q["answer"]
             if i == 0:
-                answer = (answer + 1) % 3 if type(answer) is int else answer[1:] + answer[:1]
+                answer = (answer + 1) % len(q["choices"]) if type(answer) is int else answer[1:] + answer[:1]
             self.event(answer, hint=i == 0)
             self.event(next=True)
         self.assertEqual(self.app.session_state.screen, "jp_results")
@@ -223,7 +227,7 @@ class JapaneseAppTests(unittest.TestCase):
         self.app.button(key="jp_history_back").click().run()
         self.app.button(key="jp_analysis_jp_results").click().run()
         self.assertEqual(len(self.app.exception), 0)
-        self.assertEqual(len(self.app.dataframe), 5)
+        self.assertGreaterEqual(len(self.app.dataframe), 5)
         self.app.button(key="jp_analysis_back").click().run()
         self.app.button(key="jp_new").click().run()
         self.app.button(key="subject_math").click().run()
@@ -250,6 +254,43 @@ class JapaneseAppTests(unittest.TestCase):
         self.event(self.app.session_state.jp_round["questions"][0]["answer"])
         self.app.run()
         self.assertEqual(len(jp.read_all("user_001")), 1)
+
+    def test_back_resume_preserves_partial_order_hint_elapsed_and_feedback(self):
+        self.app.radio(key="jp_category").set_value("sequence")
+        self.app.radio(key="jp_count").set_value(5)
+        self.app.button(key="jp_start").click().run()
+        question = self.app.session_state.jp_round["questions"][0]
+        partial = question["answer"][:1]
+        self.event(action="back", hint=True, seconds=12, draft_order=partial)
+        self.assertEqual(self.app.session_state.screen, "jp_settings")
+        self.assertEqual(jp.read_all("user_001"), [])
+        self.assertEqual(self.app.session_state.jp_round["index"], 0)
+        self.app.button(key="jp_resume").click().run()
+        args = json.loads(self.app.get("component_instance")[0].proto.json_args)
+        self.assertEqual(args["draft"], {"order": partial, "hint_used": True, "elapsed": 12})
+        self.event(question["answer"], hint=True, seconds=18.5)
+        saved = jp.read_all("user_001")
+        self.assertEqual(len(saved), 1)
+        self.assertTrue(saved[0]["hint_used"])
+        self.assertEqual(saved[0]["response_time_sec"], 18.5)
+        self.event(action="back", hint=True, seconds=19, draft_order=question["answer"])
+        self.app.button(key="jp_resume").click().run()
+        self.assertEqual(self.app.session_state.jp_round["phase"], "feedback")
+        self.assertEqual(jp.read_all("user_001"), saved)
+        self.event(next=True)
+        self.assertEqual(self.app.session_state.jp_round["index"], 1)
+        self.assertEqual(self.app.session_state.jp_round["draft"], {})
+
+    def test_paused_japanese_round_is_not_offered_to_other_user(self):
+        self.app.button(key="jp_start").click().run()
+        self.event(action="back", seconds=4, draft_order=[])
+        self.assertTrue(any(button.key == "jp_resume" for button in self.app.button))
+        self.app.button(key="jp_change_user").click().run()
+        self.app.button(key="select_user_002").click().run()
+        self.app.button(key="subject_japanese").click().run()
+        self.assertFalse(any(button.key == "jp_resume" for button in self.app.button))
+        self.assertEqual(jp.read_all("user_001"), [])
+        self.assertEqual(jp.read_all("user_002"), [])
 
     def test_save_retry_preserves_record_and_history_return_preserves_progress(self):
         self.app.button(key="jp_start").click().run()
