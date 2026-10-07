@@ -35,8 +35,14 @@ create table if not exists public.math_attempts (
     answer_is_10 boolean,
     operand_contains_10 boolean,
     near_10 boolean,
-    commutative_pair text
+    commutative_pair text,
+    round_size integer,
+    round_completed boolean
 );
+
+-- 既存テーブルの更新。以前の行はNULLのままです。
+alter table public.math_attempts add column if not exists round_size integer;
+alter table public.math_attempts add column if not exists round_completed boolean;
 
 create index if not exists math_attempts_user_sessions
     on public.math_attempts (user_id, session_id);

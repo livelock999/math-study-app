@@ -76,6 +76,7 @@ COLUMNS = {
     "dont_know_used": "INTEGER", "retry_flag": "INTEGER",
     "answer_is_10": "INTEGER", "operand_contains_10": "INTEGER",
     "near_10": "INTEGER", "commutative_pair": "TEXT",
+    "round_size": "INTEGER", "round_completed": "INTEGER",
 }
 
 
@@ -108,17 +109,41 @@ def make_problem(operation, limit, left, right):
     }
 
 
-def generate_problems(mode, limit, count=10):
+def problem_pool(operation, limit, special="auto"):
+    """繰り上がり・繰り下がりの条件に合う、重複のない問題候補。"""
+    if operation not in ("addition", "subtraction") or limit not in (10, 20) or special not in ("auto", "none", "with"):
+        raise ValueError("学習条件が不正です")
+    problems = []
+    for left in range(limit + 1):
+        for right in range(limit + 1):
+            if (left + right > limit if operation == "addition" else right > left):
+                continue
+            problem = make_problem(operation, limit, left, right)
+            attribute = problem["carry"] if operation == "addition" else problem["borrowing"]
+            if special == "auto" or attribute == (special == "with"):
+                problems.append(problem)
+    return problems
+
+
+def selection_error(mode, limit, count=10, special="auto"):
+    """開始できない条件なら理由を返します。問題を無理に重複させません。"""
+    if mode not in ("addition", "subtraction", "mix") or type(count) is not int or count < 1:
+        return "学習モードまたは問題数が不正です。"
+    needs = {"addition": (count + 1) // 2, "subtraction": count // 2} if mode == "mix" else {mode: count}
+    for operation, needed in needs.items():
+        available = len(problem_pool(operation, limit, special))
+        if available < needed:
+            name = "たしざん" if operation == "addition" else "ひきざん"
+            return f"この条件の{name}は{available}問です。必要な{needed}問に足りないため、問題数や条件を変えてください。"
+    return None
+
+
+def generate_problems(mode, limit, count=10, special="auto"):
     """同じセットに重複を出さず、ミックスでは両演算を半数ずつ出します。"""
-    if mode not in ("addition", "subtraction", "mix") or limit not in (10, 20):
-        raise ValueError("学習モードまたは数の範囲が不正です")
-    pools = {}
-    for operation in ("addition", "subtraction"):
-        pools[operation] = [
-            make_problem(operation, limit, left, right)
-            for left in range(limit + 1) for right in range(limit + 1)
-            if (left + right <= limit if operation == "addition" else right <= left)
-        ]
+    error = selection_error(mode, limit, count, special)
+    if error:
+        raise ValueError(error)
+    pools = {operation: problem_pool(operation, limit, special) for operation in ("addition", "subtraction")}
     if mode == "mix":
         problems = random.sample(pools["addition"], (count + 1) // 2)
         problems += random.sample(pools["subtraction"], count // 2)
@@ -139,10 +164,16 @@ def init_db(path=None):
     with closing(sqlite3.connect(path)) as connection, connection:
         definitions = ", ".join(f'"{name}" {kind}' for name, kind in COLUMNS.items())
         connection.execute(f"CREATE TABLE IF NOT EXISTS attempts ({definitions})")
+        existing = {row[1] for row in connection.execute("PRAGMA table_info(attempts)")}
+        for name in ("round_size", "round_completed"):
+            if name not in existing:
+                connection.execute(f"ALTER TABLE attempts ADD COLUMN {name} INTEGER")
         connection.execute("CREATE INDEX IF NOT EXISTS user_sessions ON attempts(user_id, session_id)")
 
 
-def make_attempt(problem, user_id, session_id, order, selection, answer, seconds, count):
+def make_attempt(problem, user_id, session_id, order, selection, answer, seconds, count, round_size=None):
+    if round_size is not None and (type(round_size) is not int or round_size < 1 or not 1 <= order <= round_size):
+        raise ValueError("セットの問題数または出題順が不正です")
     record = dict(problem)
     record.update(
         attempt_id=new_id("attempt"), user_id=user_id, session_id=session_id,
@@ -152,6 +183,7 @@ def make_attempt(problem, user_id, session_id, order, selection, answer, seconds
         calculation_correct=answer == problem["correct_answer"],
         response_time_sec=round(max(0, seconds), 3), attempt_count=count,
         hint_used=False, dont_know_used=False, retry_flag=selection == "retry",
+        round_size=round_size, round_completed=(order == round_size) if round_size is not None else None,
     )
     return record
 
@@ -188,19 +220,27 @@ def save_attempt(record, path=None):
         )
 
 
-def read_attempts(user_id, page=0, page_size=50, path=None):
+def read_attempts(user_id, page=0, page_size=50, path=None, start_at=None, end_at=None):
     """選択した学習者の履歴を最新順に読み、次ページの有無も返します。"""
     if not isinstance(user_id, str) or user_id not in USERS:
         raise ValueError("学習者が不正です。")
     if type(page) is not int or page < 0 or type(page_size) is not int or not 1 <= page_size <= 100:
         raise ValueError("履歴のページ指定が不正です。")
     limit, offset = page_size + 1, page * page_size
+    if start_at is not None or end_at is not None:
+        if (not isinstance(start_at, datetime) or not isinstance(end_at, datetime)
+                or start_at.tzinfo is None or end_at.tzinfo is None or start_at >= end_at):
+            raise ValueError("履歴の期間指定が不正です。")
+        start_at, end_at = start_at.astimezone(timezone.utc), end_at.astimezone(timezone.utc)
     if path is None:
         config = get_supabase_config()
         if config is not None:
             url, key = config
-            query = urlencode({"select": "*", "user_id": f"eq.{user_id}",
-                               "order": "datetime.desc,attempt_id.desc", "limit": limit, "offset": offset})
+            filters = [("select", "*"), ("user_id", f"eq.{user_id}"),
+                       ("order", "datetime.desc,attempt_id.desc"), ("limit", limit), ("offset", offset)]
+            if start_at is not None:
+                filters.extend([("datetime", f"gte.{start_at.isoformat()}"), ("datetime", f"lt.{end_at.isoformat()}")])
+            query = urlencode(filters)
             request = Request(f"{url}/rest/v1/math_attempts?{query}",
                               headers={"apikey": key, "Accept": "application/json"}, method="GET")
             try:
@@ -212,14 +252,37 @@ def read_attempts(user_id, page=0, page_size=50, path=None):
                         or any(not isinstance(row, dict) or row.get("user_id") != user_id
                                or not set(COLUMNS).issubset(row) for row in rows)):
                     raise ValueError("履歴の応答が不正です。")
-            except (HTTPError, URLError, OSError, ValueError):
+                if start_at is not None and any(not start_at <= datetime.fromisoformat(row["datetime"]) < end_at for row in rows):
+                    raise ValueError("対象期間外の履歴です。")
+            except (HTTPError, URLError, OSError, ValueError, TypeError):
                 raise OSError("クラウドの履歴を読み込めませんでした。接続と保存先設定を確認してください。") from None
             return rows[:page_size], len(rows) > page_size
         path = DB_PATH
     with closing(sqlite3.connect(path, timeout=10)) as connection:
         connection.row_factory = sqlite3.Row
+        period = " AND julianday(datetime) >= julianday(?) AND julianday(datetime) < julianday(?)" if start_at is not None else ""
+        parameters = [user_id]
+        if start_at is not None:
+            parameters.extend([start_at.isoformat(), end_at.isoformat()])
+        parameters.extend([limit, offset])
         rows = [dict(row) for row in connection.execute(
-            "SELECT * FROM attempts WHERE user_id = ? ORDER BY datetime DESC, attempt_id DESC LIMIT ? OFFSET ?",
-            (user_id, limit, offset),
+            f"SELECT * FROM attempts WHERE user_id = ?{period} ORDER BY datetime DESC, attempt_id DESC LIMIT ? OFFSET ?",
+            parameters,
         )]
     return rows[:page_size], len(rows) > page_size
+
+
+def read_month_attempts(user_id, year, month, path=None):
+    """日本時間の対象月だけを、ページを最後まで読み切って取得します。"""
+    if type(year) is not int or type(month) is not int or not 1 <= year <= 9998 or not 1 <= month <= 12:
+        raise ValueError("対象月が不正です。")
+    jst = timezone(timedelta(hours=9))
+    start = datetime(year, month, 1, tzinfo=jst)
+    end = datetime(year + (month == 12), 1 if month == 12 else month + 1, 1, tzinfo=jst)
+    records, page = [], 0
+    while True:
+        batch, has_more = read_attempts(user_id, page=page, page_size=100, path=path, start_at=start, end_at=end)
+        records.extend(batch)
+        if not has_more:
+            return records
+        page += 1

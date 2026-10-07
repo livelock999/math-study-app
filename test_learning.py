@@ -3,6 +3,7 @@
 import sqlite3
 import os
 import json
+import re
 from contextlib import closing
 from copy import deepcopy
 import tempfile
@@ -27,6 +28,60 @@ def test_environment(values=None):
 
 
 class LearningTests(unittest.TestCase):
+    def test_variable_counts_and_special_filters_produce_valid_unique_sets(self):
+        for count in (5, 10, 20):
+            for mode in ("addition", "subtraction", "mix"):
+                for special in ("auto", "none", "with"):
+                    problems = generate_problems(mode, 20, count=count, special=special)
+                    self.assertEqual(len(problems), count)
+                    self.assertEqual(len({p["problem_id"] for p in problems}), count)
+                    for problem in problems:
+                        self.assertTrue(0 <= problem["correct_answer"] <= 20)
+                        flag = problem["carry"] if problem["operation"] == "addition" else problem["borrowing"]
+                        if special != "auto":
+                            self.assertEqual(flag, special == "with")
+
+    def test_insufficient_or_invalid_practice_settings_fail_clearly(self):
+        for mode in ("addition", "subtraction"):
+            self.assertIsNotNone(learning.selection_error(mode, 10, count=10, special="with"))
+            with self.assertRaises(ValueError):
+                generate_problems(mode, 10, count=10, special="with")
+        for kwargs in ({"count": 0}, {"count": -1}, {"count": True}, {"special": "invalid"}):
+            with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
+                generate_problems("addition", 20, **kwargs)
+
+    def test_round_completion_is_only_marked_on_final_answer(self):
+        problem = make_problem("addition", 10, 2, 3)
+        for order in range(1, 6):
+            record = make_attempt(problem, "user_001", "completion", order, "normal", 5, 1, 1, round_size=5)
+            self.assertEqual(record["round_size"], 5)
+            self.assertEqual(record["round_completed"], order == 5)
+
+    def test_existing_database_migration_preserves_old_answers(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "old_history.sqlite3"
+            old_columns = {name: kind for name, kind in COLUMNS.items()
+                           if name not in ("round_size", "round_completed")}
+            record = make_attempt(make_problem("addition", 10, 2, 3), "user_001", "old_session",
+                                  1, "normal", 5, 1.5, 1)
+            with closing(sqlite3.connect(path)) as db, db:
+                definitions = ", ".join(f'"{name}" {kind}' for name, kind in old_columns.items())
+                db.execute(f"CREATE TABLE attempts ({definitions})")
+                names = list(old_columns)
+                db.execute(f"INSERT INTO attempts ({', '.join(names)}) VALUES ({', '.join('?' for _ in names)})",
+                           [record[name] for name in names])
+            init_db(path)
+            init_db(path)
+            with closing(sqlite3.connect(path)) as db:
+                db.row_factory = sqlite3.Row
+                saved = dict(db.execute("SELECT * FROM attempts").fetchone())
+                self.assertIn("round_size", saved)
+                self.assertIn("round_completed", saved)
+                self.assertEqual(saved["attempt_id"], record["attempt_id"])
+                self.assertEqual(saved["user_answer"], 5)
+                self.assertFalse(saved["round_completed"])
+                self.assertEqual(db.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 1)
+
     def test_all_problem_bounds_and_attributes(self):
         for limit in (10, 20):
             for operation in ("addition", "subtraction"):
@@ -203,6 +258,26 @@ class CloudStorageTests(unittest.TestCase):
                 self.assertNotIn(self.config["SUPABASE_SECRET_KEY"], str(raised.exception))
                 local.assert_not_called()
 
+    def test_cloud_month_history_reads_all_pages_with_jst_bounds(self):
+        records = [dict(self.record, attempt_id=f"month_{index:04}",
+                        datetime="2026-10-07T20:00:00+09:00") for index in range(605)]
+        with patch.dict(os.environ, self.config), patch("learning.sqlite3.connect") as local, \
+                patch("learning.supabase_urlopen") as remote:
+            response = remote.return_value.__enter__.return_value
+            response.status = 200
+            response.read.side_effect = [json.dumps(records[offset:offset + 101]).encode("utf-8")
+                                         for offset in range(0, 605, 100)]
+            loaded = learning.read_month_attempts("user_001", 2026, 10)
+            self.assertEqual(loaded, records)
+            self.assertEqual(remote.call_count, 7)
+            for index, call in enumerate(remote.call_args_list):
+                query = parse_qs(urlsplit(call.args[0].full_url).query)
+                self.assertEqual(query["user_id"], ["eq.user_001"])
+                self.assertEqual(query["offset"], [str(index * 100)])
+                self.assertEqual(query["datetime"], ["gte.2026-09-30T15:00:00+00:00",
+                                                     "lt.2026-10-31T15:00:00+00:00"])
+            local.assert_not_called()
+
 
 class HistoryStorageTests(unittest.TestCase):
     def test_local_history_separates_users_and_paginates_with_stable_order(self):
@@ -317,18 +392,25 @@ class AppFlowTests(unittest.TestCase):
         original_init = learning.init_db
         original_save = learning.save_attempt
         original_read = learning.read_attempts
+        original_month_read = learning.read_month_attempts
         self.save_record = lambda record: original_save(record, self.path)
         self.init_patch = patch("learning.init_db", lambda: original_init(self.path))
         self.save_patch = patch("learning.save_attempt", side_effect=self.save_record)
         self.read_patch = patch("learning.read_attempts",
-                                side_effect=lambda user_id, page=0, page_size=50:
-                                original_read(user_id, page=page, page_size=page_size, path=self.path))
+                                side_effect=lambda user_id, page=0, page_size=50, **kwargs:
+                                original_read(user_id, page=page, page_size=page_size,
+                                              **dict(kwargs, path=self.path)))
+        self.month_patch = patch("learning.read_month_attempts",
+                                 side_effect=lambda user_id, year, month:
+                                 original_month_read(user_id, year, month, path=self.path))
         self.init_patch.start()
         self.save_mock = self.save_patch.start()
         self.read_mock = self.read_patch.start()
+        self.month_mock = self.month_patch.start()
         self.addCleanup(self.init_patch.stop)
         self.addCleanup(self.save_patch.stop)
         self.addCleanup(self.read_patch.stop)
+        self.addCleanup(self.month_patch.stop)
         self.app = AppTest.from_file(str(Path(__file__).with_name("app.py")), default_timeout=10).run()
 
     def click_label(self, label):
@@ -560,6 +642,7 @@ class AppFlowTests(unittest.TestCase):
         self.app.button(key="history_back").click().run()
         self.assertEqual(self.app.session_state.round, feedback)
         self.assertEqual(len(self.rows()), 1)
+
         self.app.session_state["answer_keyboard"] = answer_event
         self.app.run()
         self.assertEqual(self.app.session_state.round, feedback)
@@ -568,6 +651,92 @@ class AppFlowTests(unittest.TestCase):
         self.assertEqual(self.app.session_state.round["index"], 1)
         self.assertEqual(self.app.session_state.round["phase"], "question")
         self.assertEqual(len(self.rows()), 1)
+
+    def test_practice_settings_and_empty_calendar_return(self):
+        self.app.button(key="select_user_001").click().run()
+        self.app.button(key="calendar_settings").click().run()
+        self.assertEqual(len(self.app.exception), 0)
+        self.assertEqual(self.app.session_state.screen, "calendar")
+        self.app.number_input(key="calendar_year").set_value(2024).run()
+        self.app.selectbox(key="calendar_month").set_value(2).run()
+        html = next(item.value for item in self.app.markdown if "<table" in item.value)
+        self.assertEqual([int(day) for day in re.findall(r'<td[^>]*>(\d+)<br>', html)], list(range(1, 30)))
+        self.app.number_input(key="calendar_year").set_value(2025).run()
+        html = next(item.value for item in self.app.markdown if "<table" in item.value)
+        self.assertEqual([int(day) for day in re.findall(r'<td[^>]*>(\d+)<br>', html)], list(range(1, 29)))
+        self.month_mock.side_effect = OSError("private_month_error")
+        self.app.run()
+        self.assertEqual(len(self.app.error), 1)
+        self.assertNotIn("private_month_error", self.app.error[0].value)
+        self.month_mock.side_effect = lambda *args: []
+        self.app.button(key="calendar_reload").click().run()
+        self.assertEqual(len(self.app.error), 0)
+        self.app.button(key="calendar_back").click().run()
+        self.assertEqual(self.app.session_state.screen, "settings")
+        self.app.radio(key="special_mode").set_value("with").run()
+        start_button = next(button for button in self.app.button if button.label == "れんしゅう スタート")
+        self.assertTrue(start_button.disabled)
+        self.app.radio(key="problem_count").set_value(5).run()
+        self.app.radio(key="special_mode").set_value("none").run()
+        self.click_label("れんしゅう スタート")
+        problems = self.app.session_state.round["problems"]
+        self.assertEqual(len(problems), 5)
+        self.assertTrue(all(not problem["carry"] for problem in problems))
+
+    def test_final_answer_save_failure_and_retry_completion_make_durable_stamps_once(self):
+        from activity import month_summary
+        from datetime import datetime
+
+        self.app.button(key="select_user_001").click().run()
+        self.app.radio(key="problem_count").set_value(5).run()
+        self.click_label("れんしゅう スタート")
+        for index in range(4):
+            answer = self.app.session_state.round["problems"][index]["correct_answer"]
+            self.event("answer", answer + 1 if index == 0 else answer)
+            self.event("next")
+        self.save_mock.side_effect = OSError("save failed")
+        answer = self.app.session_state.round["problems"][4]["correct_answer"]
+        self.event("answer", answer)
+        pending = deepcopy(self.app.session_state.round["pending_record"])
+        self.assertTrue(pending["round_completed"])
+        self.assertEqual(pending["round_size"], 5)
+        timestamp = datetime.fromisoformat(pending["datetime"])
+        self.assertEqual(month_summary(self.rows(), timestamp.year, timestamp.month)["stamps"], 0)
+        self.assertEqual(len(self.rows()), 4)
+
+        def saved_but_response_lost(record):
+            self.save_record(record)
+            raise OSError("response lost after save")
+
+        self.save_mock.side_effect = saved_but_response_lost
+        self.app.button(key="retry_save").click().run()
+        self.assertEqual(len(self.rows()), 5)
+        self.assertIsNotNone(self.app.session_state.round["pending_record"])
+        self.save_mock.side_effect = self.save_record
+        self.app.button(key="retry_save").click().run()
+        self.assertEqual(len(self.rows()), 5)
+        self.assertEqual(month_summary(self.rows(), timestamp.year, timestamp.month)["stamps"], 1)
+        self.event("next")
+        self.assertEqual(self.app.session_state.screen, "results")
+        self.assertTrue(any("ごほうびスタンプ" in item.value for item in self.app.success))
+        self.app.button(key="calendar_results").click().run()
+        self.assertEqual(len(self.app.exception), 0)
+        self.assertIn("1こ", self.app.metric[0].value)
+        self.app.button(key="calendar_back").click().run()
+        self.assertEqual(self.app.session_state.screen, "results")
+        self.click_label("まちがえた もんだいを もういちど")
+        self.event("answer", self.app.session_state.round["problems"][0]["correct_answer"])
+        self.event("next")
+        self.assertEqual(self.app.session_state.screen, "results")
+        self.assertEqual(len(self.rows()), 6)
+        self.assertEqual(self.rows()[-1]["selection_type"], "retry")
+        self.assertEqual(self.rows()[-1]["round_size"], 1)
+        self.assertTrue(self.rows()[-1]["round_completed"])
+        self.assertEqual(month_summary(self.rows(), timestamp.year, timestamp.month)["stamps"], 2)
+        self.app.button(key="calendar_results").click().run()
+        self.assertIn("2こ", self.app.metric[0].value)
+        self.app.run()
+        self.assertIn("2こ", self.app.metric[0].value)
 
 
 if __name__ == "__main__":

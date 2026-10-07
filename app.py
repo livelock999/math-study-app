@@ -5,11 +5,14 @@ from datetime import datetime, timezone, timedelta
 import hmac
 import os
 import sqlite3
+import calendar
 import streamlit as st
 import streamlit.components.v1 as components
 
-from learning import USERS, generate_problems, init_db, make_attempt, new_id, read_attempts, save_attempt
+from learning import (USERS, generate_problems, init_db, make_attempt, new_id,
+                      read_attempts, read_month_attempts, save_attempt, selection_error)
 from assessment import assess, recommended_problems
+from activity import JST, month_summary
 
 st.set_page_config(page_title="さんすう れんしゅう", page_icon="🔢", layout="centered")
 keyboard = components.declare_component("math_keyboard", path=str(Path(__file__).parent / "keyboard"))
@@ -17,6 +20,8 @@ keyboard = components.declare_component("math_keyboard", path=str(Path(__file__)
 
 def start_round(problems, selection_type):
     """再練習も独立したセット。回答回数だけは前のセットから引き継ぎます。"""
+    if selection_type == "normal":
+        st.session_state.practice_count = len(problems)
     st.session_state.round = {
         "session_id": new_id("session"), "problems": problems,
         "selection_type": selection_type, "index": 0, "answers": [],
@@ -28,6 +33,9 @@ def start_round(problems, selection_type):
 def save_pending_answer(state):
     """確定した回答を保存し、成功したときだけ正誤表示へ進みます。"""
     record = state["pending_record"]
+    # 更新前から練習中のセット・未保存回答も、実際の問題数を引き継ぎます。
+    record.setdefault("round_size", len(state["problems"]))
+    record.setdefault("round_completed", record["question_order"] == len(state["problems"]))
     try:
         save_attempt(record)
     except (sqlite3.Error, OSError, ValueError):
@@ -53,15 +61,25 @@ def settings_screen():
     modes = {"addition": "たしざん", "subtraction": "ひきざん", "mix": "ミックス"}
     mode = st.radio("もんだい", list(modes), format_func=modes.get, horizontal=True)
     limit = st.radio("かずの はんい", [10, 20], format_func=lambda n: f"{n}まで", horizontal=True)
-    st.caption("1かい 10もん。まちがえた もんだいは あとで れんしゅうできるよ。")
-    if st.button("れんしゅう スタート", type="primary", use_container_width=True):
+    count = st.radio("もんだいの かず", [5, 10, 20], index=[5, 10, 20].index(st.session_state.get("practice_count", 10)),
+                     format_func=lambda n: f"{n}もん", horizontal=True, key="problem_count")
+    choices = {"auto": "おまかせ", "none": "なし", "with": "あり"}
+    special = st.radio("くりあがり・くりさがり", list(choices), format_func=choices.get,
+                       horizontal=True, key="special_mode")
+    error = selection_error(mode, limit, count, special)
+    if error:
+        st.info(error)
+    st.caption(f"1かい {count}もん。まちがえた もんだいは あとで れんしゅうできるよ。")
+    if st.button("れんしゅう スタート", type="primary", use_container_width=True, disabled=bool(error)):
         st.session_state.attempt_counts = {}
-        start_round(generate_problems(mode, limit), "normal")
+        start_round(generate_problems(mode, limit, count, special), "normal")
         st.rerun()
     if st.button("学習履歴", key="history_settings", use_container_width=True):
         open_history("settings")
     if st.button("学習レポート", key="report_settings", use_container_width=True):
         open_report("settings")
+    if st.button("学習カレンダー・ごほうび", key="calendar_settings", use_container_width=True):
+        open_calendar("settings")
     if st.button("なまえを かえる"):
         st.session_state.screen = "user"
         st.rerun()
@@ -109,6 +127,7 @@ def practice_screen():
         state["pending_record"] = make_attempt(
             problem, st.session_state.user_id, state["session_id"], index + 1,
             state["selection_type"], answer, seconds, count,
+            round_size=len(problems),
         )
         save_pending_answer(state)
         st.rerun()
@@ -129,6 +148,8 @@ def results_screen():
     st.write("もういちど れんしゅうの けっか" if state["selection_type"] == "retry" else "はじめの れんしゅうの けっか")
     st.metric("せいかい", f"{total}もんちゅう {correct}もん")
     st.metric("せいかいりつ", f"{correct / total:.0%}")
+    if state["answers"][-1].get("round_completed"):
+        st.success("⭐ ごほうびスタンプを 1こ もらったよ！")
     mistakes = [problem for problem, record in zip(state["problems"], state["answers"])
                 if not record["is_correct"]]
     if mistakes:
@@ -137,13 +158,16 @@ def results_screen():
             st.rerun()
     else:
         st.success("ぜんぶ せいかい！ よく がんばったね！")
-    if st.button("あたらしい 10もんを れんしゅう", use_container_width=True):
+    new_count = st.session_state.get("practice_count", 10)
+    if st.button(f"あたらしい {new_count}もんを れんしゅう", key="new_practice", use_container_width=True):
         st.session_state.screen = "settings"
         st.rerun()
     if st.button("学習履歴", key="history_results", use_container_width=True):
         open_history("results")
     if st.button("学習レポート", key="report_results", use_container_width=True):
         open_report("results")
+    if st.button("学習カレンダー・ごほうび", key="calendar_results", use_container_width=True):
+        open_calendar("results")
     if st.button("なまえを かえる"):
         st.session_state.screen = "user"
         st.rerun()
@@ -163,6 +187,8 @@ def history_screen():
         st.rerun()
     if st.button("学習レポート", key="report_history", use_container_width=True):
         open_report("history")
+    if st.button("学習カレンダー・ごほうび", key="calendar_history", use_container_width=True):
+        open_calendar("history")
     page = st.session_state.history_page
     try:
         records, has_more = read_attempts(st.session_state.user_id, page=page)
@@ -204,6 +230,67 @@ def open_report(return_screen):
     st.session_state.report_return = return_screen
     st.session_state.screen = "report"
     st.rerun()
+
+
+def open_calendar(return_screen):
+    st.session_state.calendar_return = return_screen
+    st.session_state.screen = "calendar"
+    st.rerun()
+
+
+def calendar_screen():
+    st.subheader(f"{USERS[st.session_state.user_id]}の 学習カレンダー")
+    if st.button("もどる", key="calendar_back"):
+        st.session_state.screen = st.session_state.calendar_return
+        st.rerun()
+    today = datetime.now(JST)
+    year_column, month_column = st.columns(2)
+    year = year_column.number_input("年", min_value=2000, max_value=2100, value=today.year, step=1,
+                                    key="calendar_year")
+    month = month_column.selectbox("月", list(range(1, 13)), index=today.month - 1,
+                                  format_func=lambda n: f"{n}月", key="calendar_month")
+    try:
+        records = read_month_attempts(st.session_state.user_id, year, month)
+        summary = month_summary(records, year, month)
+    except (sqlite3.Error, OSError, ValueError, KeyError, TypeError):
+        st.error("カレンダーを読み込めませんでした。もういちど試してください。")
+        if st.button("読み込みをやりなおす", key="calendar_reload"):
+            st.rerun()
+        return
+    days = summary["days"]
+    st.metric("この月の ごほうびスタンプ", f"⭐ {summary['stamps']}こ")
+    if summary["stamps"]:
+        stars = "⭐ " * min(summary["stamps"], 20)
+        remaining = f" ＋{summary['stamps'] - 20}こ" if summary["stamps"] > 20 else ""
+        st.write(stars + remaining)
+    st.caption("1セットを最後まで答えて保存すると1こ。正解・不正解にかかわらず、再練習でももらえます。")
+    st.caption("✅ は学習した日、⭐ はスタンプをもらった日です。更新前の履歴はスタンプ対象外です。")
+    # 数字と固定の目印だけの小さな暦。スマートフォンでも7列を保ちます。
+    weekdays = "月火水木金土日"
+    html = '<table style="width:100%;table-layout:fixed;text-align:center;border-collapse:collapse"><thead><tr>'
+    html += "".join(f'<th scope="col" style="padding:6px 0">{day}</th>' for day in weekdays)
+    html += "</tr></thead><tbody>"
+    for week in calendar.Calendar(firstweekday=0).monthdayscalendar(year, month):
+        html += "<tr>"
+        for day in week:
+            details = days.get(day)
+            marks = ("✅" if details else "") + ("⭐" if details and details["stamps"] else "")
+            html += f'<td style="height:58px;border:1px solid #d8e4ed;font-size:15px">{day if day else ""}<br>{marks}</td>'
+        html += "</tr>"
+    html += "</tbody></table>"
+    st.markdown(html, unsafe_allow_html=True)
+    if not days:
+        st.info("この月はまだ学習履歴がありません。")
+        return
+    def rate(correct, count):
+        return f"{correct / count:.0%}" if count else "—"
+    table = [{"日": f"{month}/{day}", "回答数": data["count"],
+              "正答率": rate(data["correct"], data["count"]),
+              "初回回答数": data["normal_count"], "初回正答率": rate(data["normal_correct"], data["normal_count"]),
+              "再練習回答数": data["retry_count"], "再練習正答率": rate(data["retry_correct"], data["retry_count"]),
+              "スタンプ": data["stamps"]} for day, data in sorted(days.items())]
+    st.caption("日別の回答数と正答率（日本時間）。初回と再練習を分けて表示します。表は横にスクロールできます。")
+    st.dataframe(table, hide_index=True, use_container_width=True)
 
 
 def report_screen():
@@ -312,5 +399,5 @@ if "screen" not in st.session_state:
 
 screens = {"user": user_screen, "settings": settings_screen,
            "practice": practice_screen, "results": results_screen, "history": history_screen,
-           "report": report_screen}
+           "report": report_screen, "calendar": calendar_screen}
 screens[st.session_state.screen]()
