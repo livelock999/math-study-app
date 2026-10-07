@@ -33,6 +33,7 @@
     .correct { color: #146b3a; }
     .wrong { color: #8d4517; }
     .error { color: #a22b26; min-height: 24px; margin: 10px 0 0; }
+    ruby rt { font-size: .48em; color: inherit; opacity: .8; font-weight: 400; }
   </style>
 </head>
 <body>
@@ -50,6 +51,26 @@
     let draftOperation = null;
     let focusTimers = [];
     let userInteracted = false;
+    function renderText(element, value, dictionary = currentArgs.furigana) {
+      const text = value == null ? '' : String(value);
+      const entries = Object.entries(dictionary || {})
+        .filter(([word, reading]) => word && typeof reading === 'string' && reading)
+        .sort(([a], [b]) => b.length - a.length);
+      element.replaceChildren();
+      if (element.tagName === 'BUTTON') element.setAttribute('aria-label', text);
+      let plainStart = 0, position = 0;
+      while (position < text.length) {
+        const match = entries.find(([word]) => text.startsWith(word, position));
+        if (!match) { position++; continue; }
+        if (position > plainStart) element.append(document.createTextNode(text.slice(plainStart, position)));
+        const ruby = document.createElement('ruby');
+        const reading = document.createElement('rt'); reading.textContent = match[1];
+        reading.setAttribute('aria-hidden', 'true');
+        ruby.append(document.createTextNode(match[0]), reading); element.append(ruby);
+        position += match[0].length; plainStart = position;
+      }
+      if (plainStart < text.length) element.append(document.createTextNode(text.slice(plainStart)));
+    }
     function send(type, extra = {}) {
       window.parent.postMessage({isStreamlitMessage: true, type, ...extra}, '*');
     }
@@ -111,7 +132,7 @@
       root.replaceChildren();
       const card = document.createElement('div'); card.className = 'card';
       const question = document.createElement('div'); question.className = args.word_problem ? 'story' : 'question';
-      question.textContent = args.question; card.append(question);
+      renderText(question, args.question); card.append(question);
       if (args.word_problem && args.equation) {
         const equation = document.createElement('div'); equation.className = 'question';
         equation.textContent = args.equation; card.append(equation);
@@ -211,7 +232,7 @@
       if (typeof args.hint_text === 'string') {
         if (args.phase !== 'feedback') {
           if (args.hint_visible) {
-            const hint = document.createElement('p'); hint.className = 'guidance'; hint.textContent = args.hint_text;
+            const hint = document.createElement('p'); hint.className = 'guidance'; renderText(hint, args.hint_text);
             card.append(hint);
           } else {
             const hintButton = document.createElement('button'); hintButton.type = 'button'; hintButton.textContent = 'ヒントを みる';
@@ -219,7 +240,7 @@
           }
         } else if (args.explanation_visible) {
           const explanation = document.createElement('p'); explanation.className = 'guidance';
-          explanation.textContent = args.explanation_text; card.append(explanation);
+          renderText(explanation, args.explanation_text); card.append(explanation);
         } else {
           const explanationButton = document.createElement('button'); explanationButton.type = 'button';
           explanationButton.textContent = 'かんがえかた'; explanationButton.onclick = () => submit('show_explanation');
@@ -227,7 +248,8 @@
         }
         const navigation = document.createElement('div'); navigation.className = 'navigation';
         for (const [label, action] of [['もどる', 'pause'], ['学習履歴', 'open_history']]) {
-          const link = document.createElement('button'); link.type = 'button'; link.textContent = label;
+          const link = document.createElement('button'); link.type = 'button';
+          renderText(link, label, {...args.furigana, '学習': 'がくしゅう', '履歴': 'りれき'});
           link.onclick = () => submit(action); navigation.append(link);
         }
         card.append(navigation);
