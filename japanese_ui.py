@@ -10,6 +10,7 @@ import streamlit.components.v1 as components
 import learning
 import japanese as jp
 from japanese_questions import CATEGORIES, QUESTION_LABELS, ERROR_LABELS
+from furigana import READINGS
 
 keyboard = components.declare_component("japanese_keyboard", path=str(Path(__file__).parent / "japanese_keyboard"))
 
@@ -172,7 +173,7 @@ def practice():
                      correct_answer=jp.answer_text(question, question["answer"]) if previous else None,
                      explanation=question["explanation"] if previous else None,
                      last=index + 1 == len(state["questions"]), key="jp_keyboard", default=None,
-                     draft=state.get("draft", {}))
+                     draft=state.get("draft", {}), furigana=READINGS)
     # 問題中にiframeを破棄するとヒントと計測開始が消えるため、移動は回答保存後に限ります。
     if state["phase"] == "feedback":
         navigation("jp_practice")
