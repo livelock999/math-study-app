@@ -421,10 +421,12 @@ class AppFlowTests(unittest.TestCase):
         self.app.button(key=user_key).click().run()
         self.click_label("れんしゅう スタート")
 
-    def event(self, action, answer=None):
+    def event(self, action, answer=None, selected_operation=None):
         state = self.app.session_state.round
         token = f"{state['session_id']}:{state['index']}:{state['phase']}"
         event = {"token": token, "action": action, "answer": answer, "response_time_sec": 1.25}
+        if selected_operation is not None:
+            event["selected_operation"] = selected_operation
         self.app.session_state["answer_keyboard"] = event
         self.app.run()
         self.assertEqual(len(self.app.exception), 0)
@@ -734,6 +736,93 @@ class AppFlowTests(unittest.TestCase):
         self.assertTrue(self.rows()[-1]["round_completed"])
         self.assertEqual(month_summary(self.rows(), timestamp.year, timestamp.month)["stamps"], 2)
         self.app.button(key="calendar_results").click().run()
+        self.assertIn("2こ", self.app.metric[0].value)
+        self.app.run()
+        self.assertIn("2こ", self.app.metric[0].value)
+
+    def start_words(self):
+        self.app.button(key="select_user_001").click().run()
+        self.app.radio(key="problem_count").set_value(5).run()
+        self.app.radio(key="problem_format").set_value("word_problem").run()
+        self.click_label("れんしゅう スタート")
+
+    def test_words_choice_initialization_history_return_and_stale_events(self):
+        self.start_words()
+        state = self.app.session_state.round
+        self.assertEqual(state["phase"], "choose")
+        problem = state["problems"][0]
+        args = json.loads(self.app.get("component_instance")[0].proto.json_args)
+        self.assertNotIn("=", args["question"])
+        self.assertIsNone(args.get("equation"))
+        self.assertEqual(self.rows(), [])
+        self.event("answer", problem["correct_answer"])
+        self.assertEqual(self.rows(), [])
+        self.assertEqual(self.app.session_state.round["phase"], "choose")
+        chosen = self.event("choose_operation", selected_operation=problem["operation"])
+        self.assertEqual(self.app.session_state.round["phase"], "question")
+        args = json.loads(self.app.get("component_instance")[0].proto.json_args)
+        self.assertIn("= ?", args["equation"])
+        before = deepcopy(self.app.session_state.round)
+        self.app.button(key="history_practice").click().run()
+        self.app.button(key="history_back").click().run()
+        self.assertEqual(self.app.session_state.round, before)
+        self.app.session_state["answer_keyboard"] = chosen
+        self.app.run()
+        self.assertEqual(self.app.session_state.round, before)
+        answered = self.event("answer", problem["correct_answer"])
+        self.assertEqual(len(self.rows()), 1)
+        self.assertTrue(self.rows()[0]["is_correct"])
+        self.app.session_state["answer_keyboard"] = answered
+        self.app.run()
+        self.assertEqual(len(self.rows()), 1)
+        self.event("next")
+        self.assertEqual(self.app.session_state.round["phase"], "choose")
+        self.assertIsNone(self.app.session_state.round["selected_operations"].get(1))
+
+    def test_word_wrong_operation_retry_save_failure_and_reward(self):
+        self.start_words()
+        state = self.app.session_state.round
+        from words import make_word_problem
+        state["problems"][0] = make_word_problem("decrease", 20, 13, 8)
+        self.app.run()
+        self.event("choose_operation", selected_operation="addition")
+        self.save_mock.side_effect = OSError("word save failed")
+        self.event("answer", 21)
+        pending = deepcopy(self.app.session_state.round["pending_record"])
+        self.assertFalse(pending["operation_selection_correct"])
+        self.assertTrue(pending["calculation_correct"])
+        self.assertFalse(pending["is_correct"])
+        self.assertIsNone(pending["equation_correct"])
+        self.assertEqual(self.rows(), [])
+        self.save_mock.side_effect = self.save_record
+        self.app.session_state["answer_keyboard"] = None
+        self.app.button(key="retry_save").click().run()
+        self.assertEqual(self.rows()[0]["attempt_id"], pending["attempt_id"])
+        self.assertEqual(self.rows()[0]["user_answer"], 21)
+        self.event("next")
+        for index in range(1, 5):
+            problem = self.app.session_state.round["problems"][index]
+            self.event("choose_operation", selected_operation=problem["operation"])
+            self.event("answer", problem["correct_answer"])
+            self.event("next")
+        self.assertEqual(self.app.session_state.screen, "results")
+        self.assertEqual(self.app.metric[1].value, "80%")
+        self.assertTrue(self.rows()[-1]["round_completed"])
+        originals = self.rows()
+        self.click_label("まちがえた もんだいを もういちど")
+        self.assertEqual(self.app.session_state.round["phase"], "choose")
+        self.assertEqual(len(self.app.session_state.round["problems"]), 1)
+        self.event("choose_operation", selected_operation="subtraction")
+        self.event("answer", 5)
+        self.event("next")
+        self.assertEqual(self.app.session_state.screen, "results")
+        self.assertEqual(self.app.metric[1].value, "100%")
+        self.assertEqual(self.rows()[:5], originals)
+        self.assertEqual(self.rows()[-1]["selection_type"], "retry")
+        self.assertEqual(self.rows()[-1]["attempt_count"], 2)
+        self.assertTrue(self.rows()[-1]["round_completed"])
+        self.app.button(key="calendar_results").click().run()
+        self.assertEqual(len(self.app.exception), 0)
         self.assertIn("2こ", self.app.metric[0].value)
         self.app.run()
         self.assertIn("2こ", self.app.metric[0].value)

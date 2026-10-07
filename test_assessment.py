@@ -17,6 +17,29 @@ def answers(count, correct, operation="subtraction", limit=20, left=13, right=8,
 
 
 class AssessmentTests(unittest.TestCase):
+    def test_word_judgments_do_not_mix_with_calculation_mastery(self):
+        from words import make_word_problem
+
+        records = answers(10, 10)
+        problem = make_word_problem("decrease", 20, 13, 8)
+        for index in range(5):
+            records.append(make_attempt(problem, "user_001", "word_test", index + 1, "normal",
+                                        21, 1, 1, selected_operation="addition"))
+        records.append(make_attempt(problem, "user_001", "word_retry", 1, "retry", 5, 1, 2,
+                                    selected_operation="subtraction"))
+        report = assess(records)
+        self.assertEqual(report["overall"]["count"], 10)
+        self.assertEqual(report["overall"]["rate"], 1)
+        self.assertEqual(len(report["groups"]), 1)
+        self.assertIsNone(report["target"])
+        words = report["word_normal"]
+        self.assertEqual(words["count"], 5)
+        self.assertEqual(words["rate"], 0)
+        self.assertEqual(words["operation_rate"], 0)
+        self.assertEqual(words["calculation_rate"], 1)
+        self.assertEqual(report["word_retry"]["count"], 1)
+        self.assertEqual(report["word_retry"]["rate"], 1)
+
     def test_empty_and_small_samples_do_not_claim_mastery(self):
         report = assess([])
         self.assertIsNone(report["overall"]["rate"])

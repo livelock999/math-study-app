@@ -29,9 +29,11 @@ def summarize(records):
 
 def assess(records):
     """初回だけで習熟を評価。範囲・演算・繰り上がり等を揃えて比較します。"""
-    normal = sorted((row for row in records if row["selection_type"] == "normal"),
+    calculations = [row for row in records if row["problem_format"] == "calculation"]
+    words = [row for row in records if row["problem_format"] == "word_problem"]
+    normal = sorted((row for row in calculations if row["selection_type"] == "normal"),
                     key=lambda row: (row["datetime"], row["attempt_id"]))
-    retries = [row for row in records if row["selection_type"] == "retry"]
+    retries = [row for row in calculations if row["selection_type"] == "retry"]
     buckets = {}
     for row in normal:
         buckets.setdefault(category(row), []).append(row)
@@ -70,7 +72,19 @@ def assess(records):
     return {"overall": summarize(normal), "retry": summarize(retries), "groups": groups,
             "strengths": strengths, "message": message,
             "target": target["key"] if target else None,
-            "suggested_limit": max((row["number_range"] for row in normal), default=10)}
+            "suggested_limit": max((row["number_range"] for row in normal), default=10),
+            "word_normal": summarize_words([row for row in words if row["selection_type"] == "normal"]),
+            "word_retry": summarize_words([row for row in words if row["selection_type"] == "retry"])}
+
+
+def summarize_words(records):
+    summary = summarize(records)
+    for name, column in (("operation", "operation_selection_correct"), ("calculation", "calculation_correct")):
+        evaluated = [row[column] for row in records if row[column] is not None]
+        summary[f"{name}_count"] = len(evaluated)
+        summary[f"{name}_correct"] = sum(bool(value) for value in evaluated)
+        summary[f"{name}_rate"] = sum(bool(value) for value in evaluated) / len(evaluated) if evaluated else None
+    return summary
 
 
 def recommended_problems(report):

@@ -125,25 +125,37 @@ def problem_pool(operation, limit, special="auto"):
     return problems
 
 
-def selection_error(mode, limit, count=10, special="auto"):
+def selection_error(mode, limit, count=10, special="auto", problem_format="calculation"):
     """開始できない条件なら理由を返します。問題を無理に重複させません。"""
     if mode not in ("addition", "subtraction", "mix") or type(count) is not int or count < 1:
         return "学習モードまたは問題数が不正です。"
+    if problem_format not in ("calculation", "word_problem"):
+        return "問題の形式が不正です。"
+    if problem_format == "word_problem":
+        from words import word_pool
+        pool = word_pool
+    else:
+        pool = problem_pool
     needs = {"addition": (count + 1) // 2, "subtraction": count // 2} if mode == "mix" else {mode: count}
     for operation, needed in needs.items():
-        available = len(problem_pool(operation, limit, special))
+        available = len(pool(operation, limit, special))
         if available < needed:
             name = "たしざん" if operation == "addition" else "ひきざん"
             return f"この条件の{name}は{available}問です。必要な{needed}問に足りないため、問題数や条件を変えてください。"
     return None
 
 
-def generate_problems(mode, limit, count=10, special="auto"):
+def generate_problems(mode, limit, count=10, special="auto", problem_format="calculation"):
     """同じセットに重複を出さず、ミックスでは両演算を半数ずつ出します。"""
-    error = selection_error(mode, limit, count, special)
+    error = selection_error(mode, limit, count, special, problem_format)
     if error:
         raise ValueError(error)
-    pools = {operation: problem_pool(operation, limit, special) for operation in ("addition", "subtraction")}
+    if problem_format == "word_problem":
+        from words import word_pool
+        pool = word_pool
+    else:
+        pool = problem_pool
+    pools = {operation: pool(operation, limit, special) for operation in ("addition", "subtraction")}
     if mode == "mix":
         problems = random.sample(pools["addition"], (count + 1) // 2)
         problems += random.sample(pools["subtraction"], count // 2)
@@ -171,16 +183,25 @@ def init_db(path=None):
         connection.execute("CREATE INDEX IF NOT EXISTS user_sessions ON attempts(user_id, session_id)")
 
 
-def make_attempt(problem, user_id, session_id, order, selection, answer, seconds, count, round_size=None):
+def make_attempt(problem, user_id, session_id, order, selection, answer, seconds, count,
+                 round_size=None, selected_operation=None):
     if round_size is not None and (type(round_size) is not int or round_size < 1 or not 1 <= order <= round_size):
         raise ValueError("セットの問題数または出題順が不正です")
+    is_word = problem["problem_format"] == "word_problem"
+    if is_word and selected_operation not in ("addition", "subtraction"):
+        raise ValueError("文章題では、たす・ひくを選んでください。")
+    operation_correct = selected_operation == problem["operation"] if is_word else None
+    selected_answer = (problem["left_operand"] + problem["right_operand"] if selected_operation == "addition"
+                       else problem["left_operand"] - problem["right_operand"])
+    calculation_correct = (answer == selected_answer if selected_answer >= 0 else None) if is_word else answer == problem["correct_answer"]
     record = dict(problem)
     record.update(
         attempt_id=new_id("attempt"), user_id=user_id, session_id=session_id,
         datetime=datetime.now(timezone(timedelta(hours=9))).isoformat(),
         question_order=order, selection_type=selection, user_answer=answer,
-        is_correct=answer == problem["correct_answer"],
-        calculation_correct=answer == problem["correct_answer"],
+        is_correct=(operation_correct and calculation_correct is True) if is_word else answer == problem["correct_answer"],
+        operation_selection_correct=operation_correct, equation_correct=None,
+        calculation_correct=calculation_correct,
         response_time_sec=round(max(0, seconds), 3), attempt_count=count,
         hint_used=False, dont_know_used=False, retry_flag=selection == "retry",
         round_size=round_size, round_completed=(order == round_size) if round_size is not None else None,

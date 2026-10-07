@@ -25,7 +25,8 @@ def start_round(problems, selection_type):
     st.session_state.round = {
         "session_id": new_id("session"), "problems": problems,
         "selection_type": selection_type, "index": 0, "answers": [],
-        "phase": "question", "pending_record": None,
+        "phase": "choose" if problems[0]["problem_format"] == "word_problem" else "question",
+        "pending_record": None, "selected_operations": {},
     }
     st.session_state.screen = "practice"
 
@@ -66,13 +67,16 @@ def settings_screen():
     choices = {"auto": "おまかせ", "none": "なし", "with": "あり"}
     special = st.radio("くりあがり・くりさがり", list(choices), format_func=choices.get,
                        horizontal=True, key="special_mode")
-    error = selection_error(mode, limit, count, special)
+    formats = {"calculation": "けいさん", "word_problem": "ぶんしょうだい"}
+    problem_format = st.radio("もんだいの かたち", list(formats), format_func=formats.get,
+                              horizontal=True, key="problem_format")
+    error = selection_error(mode, limit, count, special, problem_format)
     if error:
         st.info(error)
     st.caption(f"1かい {count}もん。まちがえた もんだいは あとで れんしゅうできるよ。")
     if st.button("れんしゅう スタート", type="primary", use_container_width=True, disabled=bool(error)):
         st.session_state.attempt_counts = {}
-        start_round(generate_problems(mode, limit, count, special), "normal")
+        start_round(generate_problems(mode, limit, count, special, problem_format), "normal")
         st.rerun()
     if st.button("学習履歴", key="history_settings", use_container_width=True):
         open_history("settings")
@@ -90,6 +94,8 @@ def practice_screen():
     index = state["index"]
     problems = state["problems"]
     problem = problems[index]
+    is_word = problem["problem_format"] == "word_problem"
+    selected_operation = state.setdefault("selected_operations", {}).get(index)
     st.caption(f"{USERS[st.session_state.user_id]} ／ "
                f"{'もういちど れんしゅう' if state['selection_type'] == 'retry' else 'れんしゅう'}")
     st.progress(index / len(problems), text=f"{index + 1} / {len(problems)} もん")
@@ -109,13 +115,24 @@ def practice_screen():
         correct=last_answer["is_correct"] if last_answer else None,
         answer=last_answer["user_answer"] if last_answer else None,
         last=index + 1 == len(problems), key="answer_keyboard", default=None,
+        word_problem=is_word, question_id=f"{state['session_id']}:{index}",
+        equation=(f"{problem['left_operand']} {'+' if selected_operation == 'addition' else '−'} {problem['right_operand']} = ?"
+                  if is_word and selected_operation else None),
     )
     if st.button("学習履歴", key="history_practice", use_container_width=True):
         open_history("practice")
     # 古い画面から届いた値は無視し、保存後にだけ進行状態を変えます。
     if not isinstance(event, dict) or event.get("token") != token:
         return
-    if state["phase"] == "question" and event.get("action") == "answer":
+    if state["phase"] == "choose" and event.get("action") == "choose_operation":
+        choice = event.get("selected_operation")
+        if is_word and choice in ("addition", "subtraction"):
+            state["selected_operations"][index] = choice
+            state["phase"] = "question"
+            st.rerun()
+    elif state["phase"] == "question" and event.get("action") == "answer":
+        if is_word and selected_operation not in ("addition", "subtraction"):
+            return
         answer = event.get("answer")
         seconds = event.get("response_time_sec")
         if type(answer) is not int or not 0 <= answer <= 999:
@@ -128,6 +145,7 @@ def practice_screen():
             problem, st.session_state.user_id, state["session_id"], index + 1,
             state["selection_type"], answer, seconds, count,
             round_size=len(problems),
+            selected_operation=selected_operation,
         )
         save_pending_answer(state)
         st.rerun()
@@ -136,7 +154,7 @@ def practice_screen():
             st.session_state.screen = "results"
         else:
             state["index"] += 1
-            state["phase"] = "question"
+            state["phase"] = "choose" if problems[index + 1]["problem_format"] == "word_problem" else "question"
         st.rerun()
 
 
@@ -202,6 +220,9 @@ def history_screen():
                 "練習": "初回" if record["selection_type"] == "normal" else "再練習",
                 "出題順": record["question_order"], "回答回数": record["attempt_count"],
                 "回答時間（秒）": record["response_time_sec"],
+                "形式": "文章題" if record["problem_format"] == "word_problem" else "計算",
+                "たす・ひくの選択": correctness(record["operation_selection_correct"]),
+                "選んだ式の計算": correctness(record["calculation_correct"]),
             })
     except (sqlite3.Error, OSError, ValueError, KeyError, TypeError):
         st.error("履歴を読み込めませんでした。もういちど試してください。")
@@ -230,6 +251,10 @@ def open_report(return_screen):
     st.session_state.report_return = return_screen
     st.session_state.screen = "report"
     st.rerun()
+
+
+def correctness(value):
+    return "—（未評価）" if value is None else "○" if value else "×"
 
 
 def open_calendar(return_screen):
@@ -320,6 +345,7 @@ def report_screen():
     else:
         st.info("まだ学習履歴がありません。れんしゅうすると、ここに表示されます。")
     overall = report["overall"]
+    st.write("**計算問題の評価（文章題とは別集計）**")
     counts, accuracy, speed = st.columns(3)
     counts.metric("初回の回答", f"{overall['count']}問")
     accuracy.metric("初回正答率", f"{overall['rate']:.0%}" if overall["count"] else "—")
@@ -338,6 +364,20 @@ def report_screen():
     if retry["count"]:
         st.write(f"再練習では{retry['count']}問中{retry['correct']}問正解（{retry['rate']:.0%}）。"
                  "初回の正答率とは分けて表示しています。")
+    if report["word_normal"]["count"] or report["word_retry"]["count"]:
+        st.write("**文章題の回答**")
+        word_table = []
+        for title, data in (("初回", report["word_normal"]), ("再練習", report["word_retry"])):
+            def display_rate(value):
+                return f"{value:.0%}" if value is not None else "—"
+            word_table.append({"練習": title, "回答数": data["count"],
+                               "両方正しい": display_rate(data["rate"]),
+                               "たす・ひくの選択": display_rate(data["operation_rate"]),
+                               "選んだ式の計算": display_rate(data["calculation_rate"]),
+                               "計算の評価数": data["calculation_count"]})
+        st.dataframe(word_table, hide_index=True, use_container_width=True)
+        st.caption("演算選択と、その選んだ式の計算を別に見ています。式の自作・文章理解そのものは評価しません。"
+                   "選んだ式の答えが負の数になる場合は計算未評価です。")
     with st.expander("評価の見方"):
         st.write("種類ごとに5問未満は判断保留、正答率90%以上は「よくできています」、"
                  "80%以上90%未満は「もう少し練習」、80%未満は「優先して練習」です。"
@@ -345,6 +385,7 @@ def report_screen():
         st.write("最近の変化は同じ数の範囲・演算・繰り上がり／繰り下がりの種類について、"
                  "直近10問とその前10問を比較します。最大500回答を集計し、再練習は習熟の判定に含めません。")
     label = "おすすめの5問を れんしゅう" if report["target"] else "ミックス10問を れんしゅう"
+    st.caption("おすすめの練習は計算問題の回答だけから選びます。文章題は設定画面から選べます。")
     if st.button(label, key="report_practice", type="primary", use_container_width=True):
         st.session_state.attempt_counts = {}
         start_round(recommended_problems(report), "normal")
