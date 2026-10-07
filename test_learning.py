@@ -439,6 +439,64 @@ class AppFlowTests(unittest.TestCase):
         self.assertEqual(self.app.session_state.screen, "settings")
         self.assertEqual(self.app.session_state.user_id, "user_001")
 
+    def test_report_targets_selected_user_and_starts_recommended_practice(self):
+        for index in range(10):
+            record = make_attempt(make_problem("subtraction", 20, 13, 8), "user_001", "report_test",
+                                  index + 1, "normal", 6, 2, 1)
+            self.save_record(record)
+        other = make_attempt(make_problem("addition", 10, 2, 3), "user_002", "other",
+                             1, "normal", 5, 1, 1)
+        self.save_record(other)
+        self.app.button(key="select_user_001").click().run()
+        self.app.button(key="report_settings").click().run()
+        self.assertEqual(len(self.app.exception), 0)
+        self.assertEqual(self.app.metric[0].value, "10問")
+        self.assertEqual(self.app.metric[1].value, "0%")
+        self.assertEqual(len(self.app.dataframe[0].value), 1)
+        self.app.button(key="report_back").click().run()
+        self.assertEqual(self.app.session_state.screen, "settings")
+        self.app.button(key="report_settings").click().run()
+        self.app.button(key="report_practice").click().run()
+        self.assertEqual(len(self.app.exception), 0)
+        self.assertEqual(self.app.session_state.screen, "practice")
+        self.assertEqual(self.app.session_state.round["selection_type"], "normal")
+        problems = self.app.session_state.round["problems"]
+        self.assertEqual(len(problems), 5)
+        self.assertTrue(all(p["operation"] == "subtraction" and p["borrowing"] for p in problems))
+        self.assertEqual(len(self.rows()), 11)
+
+    def test_report_failure_reload_and_return_preserve_active_round(self):
+        self.start()
+        before = deepcopy(self.app.session_state.round)
+        self.app.button(key="history_practice").click().run()
+        self.app.button(key="report_history").click().run()
+        self.assertEqual(len(self.app.exception), 0)
+        self.read_mock.side_effect = OSError("private_database_error")
+        self.app.run()
+        self.assertEqual(len(self.app.error), 1)
+        self.assertNotIn("private_database_error", self.app.error[0].value)
+        self.read_mock.side_effect = lambda *args, **kwargs: ([], False)
+        self.app.button(key="report_reload").click().run()
+        self.assertEqual(len(self.app.error), 0)
+        self.app.button(key="report_back").click().run()
+        self.assertEqual(self.app.session_state.screen, "history")
+        self.app.button(key="history_back").click().run()
+        self.assertEqual(self.app.session_state.round, before)
+
+    def test_report_uses_up_to_500_answers_across_history_pages(self):
+        record = make_attempt(make_problem("addition", 10, 2, 3), "user_001", "sample",
+                              1, "normal", 5, 1, 1)
+        records = [dict(record, attempt_id=f"report_{index:04}") for index in range(501)]
+        self.read_mock.side_effect = lambda user_id, page=0, page_size=50: (
+            records[page * page_size:(page + 1) * page_size],
+            (page + 1) * page_size < len(records))
+        self.app.button(key="select_user_001").click().run()
+        self.app.button(key="report_settings").click().run()
+        self.assertEqual(len(self.app.exception), 0)
+        self.assertEqual(self.app.metric[0].value, "500問")
+        self.assertEqual(self.read_mock.call_count, 5)
+        self.assertTrue(any("直近500回答" in caption.value for caption in self.app.caption))
+
     def test_history_user_switch_and_page_navigation(self):
         for index in range(51):
             record = make_attempt(make_problem("addition", 20, 8, 5), "user_001", "history_one", index + 1,

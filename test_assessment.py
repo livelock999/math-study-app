@@ -1,0 +1,67 @@
+import unittest
+
+from assessment import assess, category, recommended_problems
+from learning import make_attempt, make_problem
+
+
+def answers(count, correct, operation="subtraction", limit=20, left=13, right=8,
+            selection="normal", start=0):
+    problem = make_problem(operation, limit, left, right)
+    result = []
+    for index in range(count):
+        row = make_attempt(problem, "user_001", "test", index + 1, selection,
+                           problem["correct_answer"] + (index >= correct), index + 1, 1)
+        row.update(datetime="2026-10-07T20:00:00+09:00", attempt_id=f"test_{start + index:04}")
+        result.append(row)
+    return result
+
+
+class AssessmentTests(unittest.TestCase):
+    def test_empty_and_small_samples_do_not_claim_mastery(self):
+        report = assess([])
+        self.assertIsNone(report["overall"]["rate"])
+        self.assertIsNone(report["target"])
+        small = assess(answers(4, 0))
+        self.assertIsNone(small["target"])
+        self.assertIn("判断保留", small["groups"][0]["status"])
+
+    def test_retries_do_not_inflate_initial_accuracy(self):
+        records = answers(10, 4) + answers(10, 10, selection="retry", start=10)
+        report = assess(records)
+        self.assertEqual(report["overall"]["count"], 10)
+        self.assertEqual(report["overall"]["rate"], .4)
+        self.assertEqual(report["retry"]["rate"], 1)
+        self.assertEqual(report["overall"]["seconds"], 2.5)
+        problems = recommended_problems(report)
+        self.assertEqual(len(problems), 5)
+        self.assertEqual(len({p["problem_id"] for p in problems}), 5)
+        self.assertTrue(all(category(p) == ("subtraction", 20, True) for p in problems))
+        self.assertTrue(all(p["correct_answer"] >= 0 for p in problems))
+
+    def test_trend_compares_matching_categories_in_time_order(self):
+        records = answers(10, 2) + answers(10, 8, start=10)
+        records += answers(10, 10, operation="addition", limit=10, left=2, right=3, start=20)
+        report = assess(list(reversed(records)))
+        subtraction = next(g for g in report["groups"] if g["key"][0] == "subtraction")
+        self.assertIn("+60ポイント", subtraction["trend"])
+        self.assertEqual(len(report["strengths"]), 1)
+        self.assertEqual(report["target"], ("subtraction", 20, True))
+
+    def test_fast_errors_and_slow_correct_answers_do_not_change_accuracy_judgment(self):
+        records = answers(10, 10)
+        for row in records:
+            row["response_time_sec"] = 120
+        report = assess(records)
+        self.assertIsNone(report["target"])
+        self.assertEqual(len(report["strengths"]), 1)
+        self.assertEqual(len(recommended_problems(report)), 10)
+
+    def test_number_ranges_remain_separate(self):
+        report = assess(answers(5, 5, limit=10, left=8, right=3)
+                        + answers(5, 0, start=5))
+        self.assertEqual(len(report["groups"]), 2)
+        self.assertEqual(report["target"], ("subtraction", 20, True))
+
+
+if __name__ == "__main__":
+    unittest.main()
