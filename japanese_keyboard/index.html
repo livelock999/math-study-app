@@ -28,6 +28,7 @@ const root = document.getElementById('root');
 let token = null, questionId = null, shownAt = 0, phase = null;
 let pending = false, hintUsed = false, order = [], choices = [], form = null;
 let chooseOption = null, nextAction = null, redrawOrder = null, eventNumber = 0;
+let elapsedBefore = 0, resumeToken = null;
 function send(type, extra = {}) { window.parent.postMessage({isStreamlitMessage: true, type, ...extra}, '*'); }
 function resize() { send('streamlit:setFrameHeight', {height: document.body.scrollHeight + 12}); }
 function submit(action, answer = null) {
@@ -35,7 +36,8 @@ function submit(action, answer = null) {
   pending = true;
   root.querySelectorAll('button').forEach(b => b.disabled = true);
   send('streamlit:setComponentValue', {value: {token, event_id: `${token}:${++eventNumber}`, action, answer,
-    response_time_sec: (performance.now() - shownAt) / 1000, hint_used: hintUsed}});
+    response_time_sec: elapsedBefore + (performance.now() - shownAt) / 1000,
+    hint_used: hintUsed, draft_order: [...order]}});
 }
 function element(tag, text, className = '') {
   const result = document.createElement(tag); result.textContent = text; result.className = className; return result;
@@ -53,8 +55,10 @@ window.addEventListener('message', event => {
     return;
   }
   token = args.token; phase = args.phase; form = args.form; choices = args.choices;
-  if (questionId !== args.question_id) {
-    questionId = args.question_id; hintUsed = false; order = []; shownAt = performance.now();
+  if (questionId !== args.question_id || (args.token.includes(':resume') && resumeToken !== args.token)) {
+    questionId = args.question_id; resumeToken = args.token;
+    hintUsed = args.draft?.hint_used === true; order = [...(args.draft?.order || [])];
+    elapsedBefore = args.draft?.elapsed || 0; shownAt = performance.now();
   }
   pending = false; chooseOption = null; nextAction = null; redrawOrder = null; root.replaceChildren();
   const card = element('div', '', 'card');
@@ -94,7 +98,7 @@ window.addEventListener('message', event => {
     card.append(hintButton, hint);
     card.append(element('p', form === 'ordering'
       ? '1・2・3 または タッチで じゅんばんに えらぼう。Enterで こたえる。Backspaceで 1こ もどす。'
-      : '1・2・3 の キーや テンキー、タッチで こたえよう。Tabと Enterでも えらべるよ。', 'help'));
+      : `${choices.map((_, i) => i + 1).join('・')} の キーや テンキー、タッチで こたえよう。Tabと Enterでも えらべるよ。`, 'help'));
   } else {
     const feedback = element('p', args.correct ? '○ せいかい！' : '× もういちど れんしゅうしよう',
                              `feedback ${args.correct ? 'correct' : 'wrong'}`);
@@ -105,8 +109,19 @@ window.addEventListener('message', event => {
     const next = button(args.last ? 'けっかを みる ↵' : 'つぎへ ↵', () => submit('next'));
     card.append(next); nextAction = () => next.click();
   }
+  if (args.draft != null) card.append(button('もどる', () => submit('back'), 'secondary'));
   root.append(card); redrawOrder?.(); resize();
-  requestAnimationFrame(() => root.querySelector('button:not(:disabled)')?.focus());
+  const initialFocus = root.querySelector('button:not(:disabled)');
+  const focusToken = token;
+  function focusInitial() {
+    if (token !== focusToken || pending) return;
+    const active = document.activeElement;
+    if (active === document.body || active === document.documentElement || !document.hasFocus()) {
+      window.focus(); initialFocus?.focus({preventScroll: true});
+    }
+  }
+  requestAnimationFrame(() => { window.focus(); initialFocus?.focus({preventScroll: true}); });
+  [100, 300].forEach(delay => setTimeout(focusInitial, delay));
 });
 document.addEventListener('keydown', event => {
   if (pending || event.isComposing || event.repeat || event.ctrlKey || event.altKey || event.metaKey) return;
