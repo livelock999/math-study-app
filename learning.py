@@ -9,7 +9,7 @@ import uuid
 import json
 import os
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 DB_PATH = Path(__file__).parent / "data" / "history.sqlite3"
@@ -186,3 +186,40 @@ def save_attempt(record, path=None):
             "ON CONFLICT(attempt_id) DO NOTHING",
             [record[name] for name in names],
         )
+
+
+def read_attempts(user_id, page=0, page_size=50, path=None):
+    """選択した学習者の履歴を最新順に読み、次ページの有無も返します。"""
+    if not isinstance(user_id, str) or user_id not in USERS:
+        raise ValueError("学習者が不正です。")
+    if type(page) is not int or page < 0 or type(page_size) is not int or not 1 <= page_size <= 100:
+        raise ValueError("履歴のページ指定が不正です。")
+    limit, offset = page_size + 1, page * page_size
+    if path is None:
+        config = get_supabase_config()
+        if config is not None:
+            url, key = config
+            query = urlencode({"select": "*", "user_id": f"eq.{user_id}",
+                               "order": "datetime.desc,attempt_id.desc", "limit": limit, "offset": offset})
+            request = Request(f"{url}/rest/v1/math_attempts?{query}",
+                              headers={"apikey": key, "Accept": "application/json"}, method="GET")
+            try:
+                with supabase_urlopen(request, timeout=15) as response:
+                    if not 200 <= response.status < 300:
+                        raise OSError("履歴を読み込めませんでした。")
+                    rows = json.loads(response.read().decode("utf-8"))
+                if (not isinstance(rows, list) or len(rows) > limit
+                        or any(not isinstance(row, dict) or row.get("user_id") != user_id
+                               or not set(COLUMNS).issubset(row) for row in rows)):
+                    raise ValueError("履歴の応答が不正です。")
+            except (HTTPError, URLError, OSError, ValueError):
+                raise OSError("クラウドの履歴を読み込めませんでした。接続と保存先設定を確認してください。") from None
+            return rows[:page_size], len(rows) > page_size
+        path = DB_PATH
+    with closing(sqlite3.connect(path, timeout=10)) as connection:
+        connection.row_factory = sqlite3.Row
+        rows = [dict(row) for row in connection.execute(
+            "SELECT * FROM attempts WHERE user_id = ? ORDER BY datetime DESC, attempt_id DESC LIMIT ? OFFSET ?",
+            (user_id, limit, offset),
+        )]
+    return rows[:page_size], len(rows) > page_size

@@ -1,13 +1,14 @@
 """起動: python -m streamlit run app.py"""
 
 from pathlib import Path
+from datetime import datetime, timezone, timedelta
 import hmac
 import os
 import sqlite3
 import streamlit as st
 import streamlit.components.v1 as components
 
-from learning import USERS, generate_problems, init_db, make_attempt, new_id, save_attempt
+from learning import USERS, generate_problems, init_db, make_attempt, new_id, read_attempts, save_attempt
 
 st.set_page_config(page_title="さんすう れんしゅう", page_icon="🔢", layout="centered")
 keyboard = components.declare_component("math_keyboard", path=str(Path(__file__).parent / "keyboard"))
@@ -56,6 +57,8 @@ def settings_screen():
         st.session_state.attempt_counts = {}
         start_round(generate_problems(mode, limit), "normal")
         st.rerun()
+    if st.button("学習履歴", key="history_settings", use_container_width=True):
+        open_history("settings")
     if st.button("なまえを かえる"):
         st.session_state.screen = "user"
         st.rerun()
@@ -86,6 +89,8 @@ def practice_screen():
         answer=last_answer["user_answer"] if last_answer else None,
         last=index + 1 == len(problems), key="answer_keyboard", default=None,
     )
+    if st.button("学習履歴", key="history_practice", use_container_width=True):
+        open_history("practice")
     # 古い画面から届いた値は無視し、保存後にだけ進行状態を変えます。
     if not isinstance(event, dict) or event.get("token") != token:
         return
@@ -132,9 +137,60 @@ def results_screen():
     if st.button("あたらしい 10もんを れんしゅう", use_container_width=True):
         st.session_state.screen = "settings"
         st.rerun()
+    if st.button("学習履歴", key="history_results", use_container_width=True):
+        open_history("results")
     if st.button("なまえを かえる"):
         st.session_state.screen = "user"
         st.rerun()
+
+
+def open_history(return_screen):
+    st.session_state.history_return = return_screen
+    st.session_state.history_page = 0
+    st.session_state.screen = "history"
+    st.rerun()
+
+
+def history_screen():
+    st.subheader(f"{USERS[st.session_state.user_id]}の 学習履歴")
+    if st.button("もどる", key="history_back"):
+        st.session_state.screen = st.session_state.history_return
+        st.rerun()
+    page = st.session_state.history_page
+    try:
+        records, has_more = read_attempts(st.session_state.user_id, page=page)
+        table = []
+        for record in records:
+            answered_at = datetime.fromisoformat(record["datetime"]).astimezone(timezone(timedelta(hours=9)))
+            table.append({
+                "日時（日本時間）": answered_at.strftime("%Y/%m/%d %H:%M:%S"),
+                "問題": record["question_text"], "自分の回答": record["user_answer"],
+                "正しい答え": record["correct_answer"], "正誤": "○" if record["is_correct"] else "×",
+                "練習": "初回" if record["selection_type"] == "normal" else "再練習",
+                "出題順": record["question_order"], "回答回数": record["attempt_count"],
+                "回答時間（秒）": record["response_time_sec"],
+            })
+    except (sqlite3.Error, OSError, ValueError, KeyError, TypeError):
+        st.error("履歴を読み込めませんでした。もういちど試してください。")
+        if st.button("読み込みをやりなおす", key="history_reload"):
+            st.rerun()
+        return
+    if not table:
+        st.info("まだ学習履歴がありません。れんしゅうすると、ここに表示されます。" if page == 0
+                else "このページの履歴はありません。前のページにもどってください。")
+    else:
+        st.caption("新しい回答から50件ずつ表示します。表は横にスクロールできます。")
+        st.dataframe(table, hide_index=True, use_container_width=True)
+    st.caption(f"{page + 1} ページ")
+    previous, following = st.columns(2)
+    with previous:
+        if st.button("前のページ", key="history_prev", disabled=page == 0, use_container_width=True):
+            st.session_state.history_page -= 1
+            st.rerun()
+    with following:
+        if st.button("次のページ", key="history_next", disabled=not has_more, use_container_width=True):
+            st.session_state.history_page += 1
+            st.rerun()
 
 
 def check_access():
@@ -184,5 +240,5 @@ if "screen" not in st.session_state:
     st.session_state.screen = "user"
 
 screens = {"user": user_screen, "settings": settings_screen,
-           "practice": practice_screen, "results": results_screen}
+           "practice": practice_screen, "results": results_screen, "history": history_screen}
 screens[st.session_state.screen]()

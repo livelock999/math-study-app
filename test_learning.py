@@ -4,11 +4,13 @@ import sqlite3
 import os
 import json
 from contextlib import closing
+from copy import deepcopy
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 from urllib.error import URLError, HTTPError
+from urllib.parse import parse_qs, urlsplit
 
 from streamlit.testing.v1 import AppTest
 import learning
@@ -168,6 +170,78 @@ class CloudStorageTests(unittest.TestCase):
                 self.assertNotIn(self.config["SUPABASE_SECRET_KEY"], str(raised.exception))
                 local.assert_not_called()
 
+    def test_cloud_history_uses_user_filter_and_pagination(self):
+        records = [dict(self.record, attempt_id=f"attempt_{index}") for index in range(4)]
+        with patch.dict(os.environ, self.config), patch("learning.sqlite3.connect") as local, \
+                patch("learning.supabase_urlopen") as remote:
+            response = remote.return_value.__enter__.return_value
+            response.status = 200
+            response.read.return_value = json.dumps(records).encode("utf-8")
+            history, has_more = learning.read_attempts("user_001", page=2, page_size=3)
+            self.assertEqual(history, records[:3])
+            self.assertTrue(has_more)
+            request = remote.call_args.args[0]
+            self.assertEqual(request.get_method(), "GET")
+            query = parse_qs(urlsplit(request.full_url).query)
+            self.assertEqual(query["user_id"], ["eq.user_001"])
+            self.assertEqual(query["offset"], ["6"])
+            self.assertEqual(query["limit"], ["4"])
+            self.assertEqual(query["order"], ["datetime.desc,attempt_id.desc"])
+            self.assertEqual(query["select"], ["*"])
+            self.assertEqual(dict((k.lower(), v) for k, v in request.header_items())["apikey"],
+                             self.config["SUPABASE_SECRET_KEY"])
+            local.assert_not_called()
+
+    def test_cloud_history_errors_are_hidden_and_have_no_local_fallback(self):
+        for failure in (URLError(self.config["SUPABASE_SECRET_KEY"]),
+                        HTTPError("https://example.supabase.co", 403, self.config["SUPABASE_SECRET_KEY"], {}, None)):
+            with self.subTest(failure=type(failure).__name__), patch.dict(os.environ, self.config), \
+                    patch("learning.sqlite3.connect") as local, \
+                    patch("learning.supabase_urlopen", side_effect=failure):
+                with self.assertRaises(OSError) as raised:
+                    learning.read_attempts("user_002")
+                self.assertNotIn(self.config["SUPABASE_SECRET_KEY"], str(raised.exception))
+                local.assert_not_called()
+
+
+class HistoryStorageTests(unittest.TestCase):
+    def test_local_history_separates_users_and_paginates_with_stable_order(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "history.sqlite3"
+            init_db(path)
+            problem = make_problem("subtraction", 20, 13, 8)
+            for attempt_id, user_id, timestamp in [
+                ("attempt_a", "user_001", "2026-10-07T19:00:00+09:00"),
+                ("attempt_c", "user_001", "2026-10-07T20:00:00+09:00"),
+                ("attempt_b", "user_001", "2026-10-07T20:00:00+09:00"),
+                ("attempt_z", "user_002", "2026-10-07T21:00:00+09:00"),
+            ]:
+                record = make_attempt(problem, user_id, "history_test", 1, "normal", 5, 1, 1)
+                record.update(attempt_id=attempt_id, datetime=timestamp)
+                save_attempt(record, path)
+            first, more = learning.read_attempts("user_001", page_size=2, path=path)
+            second, last_more = learning.read_attempts("user_001", page=1, page_size=2, path=path)
+            self.assertEqual([r["attempt_id"] for r in first], ["attempt_c", "attempt_b"])
+            self.assertEqual([r["attempt_id"] for r in second], ["attempt_a"])
+            self.assertTrue(more)
+            self.assertFalse(last_more)
+            self.assertTrue(all(r["user_id"] == "user_001" for r in first + second))
+            self.assertEqual(learning.read_attempts("user_001", page=2, page_size=2, path=path), ([], False))
+            other, _ = learning.read_attempts("user_002", path=path)
+            self.assertEqual([r["attempt_id"] for r in other], ["attempt_z"])
+
+    def test_history_rejects_bad_user_and_pagination_before_storage_access(self):
+        cases = [("unknown", 0, 50), ("user_001' OR 1=1 --", 0, 50),
+                 ("user_001", -1, 50), ("user_001", True, 50),
+                 ("user_001", 0, 0), ("user_001", 0, 101)]
+        for user, page, size in cases:
+            with self.subTest(user=user, page=page, size=size), patch("learning.sqlite3.connect") as local, \
+                    patch("learning.supabase_urlopen") as remote:
+                with self.assertRaises(ValueError):
+                    learning.read_attempts(user, page=page, page_size=size)
+                local.assert_not_called()
+                remote.assert_not_called()
+
 
 class AuthenticationTests(unittest.TestCase):
     """公開設定で認証前に履歴初期化や学習画面へ進まないことを検証。"""
@@ -184,7 +258,7 @@ class AuthenticationTests(unittest.TestCase):
         self.addCleanup(storage.stop)
 
     def app(self):
-        return AppTest.from_file(str(Path(__file__).with_name("app.py"))).run()
+        return AppTest.from_file(str(Path(__file__).with_name("app.py")), default_timeout=10).run()
 
     def test_password_required_without_password_stops_before_storage(self):
         os.environ["MATH_REQUIRE_PASSWORD"] = "true"
@@ -242,14 +316,20 @@ class AppFlowTests(unittest.TestCase):
         self.path = Path(self.folder.name) / "history.sqlite3"
         original_init = learning.init_db
         original_save = learning.save_attempt
+        original_read = learning.read_attempts
         self.save_record = lambda record: original_save(record, self.path)
         self.init_patch = patch("learning.init_db", lambda: original_init(self.path))
         self.save_patch = patch("learning.save_attempt", side_effect=self.save_record)
+        self.read_patch = patch("learning.read_attempts",
+                                side_effect=lambda user_id, page=0, page_size=50:
+                                original_read(user_id, page=page, page_size=page_size, path=self.path))
         self.init_patch.start()
         self.save_mock = self.save_patch.start()
+        self.read_mock = self.read_patch.start()
         self.addCleanup(self.init_patch.stop)
         self.addCleanup(self.save_patch.stop)
-        self.app = AppTest.from_file(str(Path(__file__).with_name("app.py"))).run()
+        self.addCleanup(self.read_patch.stop)
+        self.app = AppTest.from_file(str(Path(__file__).with_name("app.py")), default_timeout=10).run()
 
     def click_label(self, label):
         next(button for button in self.app.button if button.label == label).click().run()
@@ -338,6 +418,98 @@ class AppFlowTests(unittest.TestCase):
         self.assertEqual(self.rows()[0]["attempt_id"], pending["attempt_id"])
         self.assertEqual(self.rows()[0]["user_answer"], answer)
         self.assertEqual(self.rows()[0]["response_time_sec"], 1.25)
+
+    def test_history_empty_and_read_failure_can_reload_without_losing_selection(self):
+        self.app.button(key="select_user_001").click().run()
+        self.app.button(key="history_settings").click().run()
+        self.assertEqual(self.app.session_state.screen, "history")
+        self.assertEqual(len(self.app.exception), 0)
+        self.assertEqual(len(self.app.dataframe), 0)
+        self.assertTrue(any("まだ" in message.value for message in self.app.info))
+        self.assertEqual(self.read_mock.call_args.args[0], "user_001")
+        self.read_mock.side_effect = OSError("sb_secret_should_never_show")
+        self.app.run()
+        self.assertEqual(len(self.app.exception), 0)
+        self.assertEqual(len(self.app.error), 1)
+        self.assertNotIn("sb_secret_should_never_show", self.app.error[0].value)
+        self.read_mock.side_effect = lambda *args, **kwargs: ([], False)
+        self.app.button(key="history_reload").click().run()
+        self.assertEqual(len(self.app.error), 0)
+        self.app.button(key="history_back").click().run()
+        self.assertEqual(self.app.session_state.screen, "settings")
+        self.assertEqual(self.app.session_state.user_id, "user_001")
+
+    def test_history_user_switch_and_page_navigation(self):
+        for index in range(51):
+            record = make_attempt(make_problem("addition", 20, 8, 5), "user_001", "history_one", index + 1,
+                                  "normal", 13, 1, 1)
+            record.update(attempt_id=f"history_{index:03}", datetime="2026-10-07T20:00:00+09:00")
+            self.save_record(record)
+        other = make_attempt(make_problem("subtraction", 20, 13, 8), "user_002", "history_two", 1,
+                             "normal", 5, 1, 1)
+        self.save_record(other)
+        self.app.button(key="select_user_001").click().run()
+        self.app.button(key="history_settings").click().run()
+        self.assertEqual(len(self.app.exception), 0)
+        self.assertEqual(len(self.app.dataframe[0].value), 50)
+        self.app.button(key="history_next").click().run()
+        self.assertEqual(self.app.session_state.history_page, 1)
+        self.assertEqual(len(self.app.dataframe[0].value), 1)
+        self.assertTrue(self.app.button(key="history_next").disabled)
+        self.app.button(key="history_prev").click().run()
+        self.assertEqual(self.app.session_state.history_page, 0)
+        self.app.button(key="history_back").click().run()
+        self.click_label("なまえを かえる")
+        self.app.button(key="select_user_002").click().run()
+        self.app.button(key="history_settings").click().run()
+        self.assertEqual(self.app.session_state.history_page, 0)
+        self.assertEqual(self.read_mock.call_args.args[0], "user_002")
+        table = self.app.dataframe[0].value
+        self.assertEqual(len(table), 1)
+        self.assertIn("13 − 8 = ?", table.to_string())
+        self.assertNotIn("8 + 5 = ?", table.to_string())
+
+    def test_history_from_results_returns_to_same_round_and_can_retry(self):
+        self.start()
+        for index in range(10):
+            state = self.app.session_state.round
+            answer = state["problems"][index]["correct_answer"]
+            self.event("answer", answer + 1 if index == 0 else answer)
+            self.event("next")
+        original_round = dict(self.app.session_state.round)
+        self.app.button(key="history_results").click().run()
+        self.assertEqual(self.app.session_state.screen, "history")
+        self.assertEqual(len(self.app.dataframe[0].value), 10)
+        self.app.button(key="history_back").click().run()
+        self.assertEqual(self.app.session_state.screen, "results")
+        self.assertEqual(self.app.session_state.round, original_round)
+        self.click_label("まちがえた もんだいを もういちど")
+        self.assertEqual(self.app.session_state.round["selection_type"], "retry")
+        self.assertEqual(len(self.app.session_state.round["problems"]), 1)
+
+    def test_history_during_practice_preserves_question_and_feedback_without_duplicate_save(self):
+        self.start()
+        before = deepcopy(self.app.session_state.round)
+        self.app.button(key="history_practice").click().run()
+        self.assertEqual(self.app.session_state.screen, "history")
+        self.app.button(key="history_back").click().run()
+        self.assertEqual(self.app.session_state.screen, "practice")
+        self.assertEqual(self.app.session_state.round, before)
+        self.assertEqual(self.rows(), [])
+        answer_event = self.event("answer", before["problems"][0]["correct_answer"])
+        feedback = deepcopy(self.app.session_state.round)
+        self.app.button(key="history_practice").click().run()
+        self.app.button(key="history_back").click().run()
+        self.assertEqual(self.app.session_state.round, feedback)
+        self.assertEqual(len(self.rows()), 1)
+        self.app.session_state["answer_keyboard"] = answer_event
+        self.app.run()
+        self.assertEqual(self.app.session_state.round, feedback)
+        self.assertEqual(len(self.rows()), 1)
+        self.event("next")
+        self.assertEqual(self.app.session_state.round["index"], 1)
+        self.assertEqual(self.app.session_state.round["phase"], "question")
+        self.assertEqual(len(self.rows()), 1)
 
 
 if __name__ == "__main__":
