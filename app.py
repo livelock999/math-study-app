@@ -485,9 +485,17 @@ if st.session_state.screen in ("settings", "jp_settings"):
         st.session_state.screen = "jp_settings"
         st.rerun()
 
+if st.session_state.screen in ("settings", "jp_settings", "report", "jp_analysis", "results", "jp_results"):
+    if st.button("共通レポート・教科横断分析（保護者向け）", key="cross_open", use_container_width=True):
+        st.session_state.cross_return = st.session_state.screen
+        st.session_state.screen = "cross_report"
+        st.rerun()
+
+from cross_subject_ui import report_screen as cross_report_screen
+
 screens = {"user": user_screen, "settings": settings_screen,
            "practice": practice_screen, "results": results_screen, "history": history_screen,
-           "report": report_screen, "calendar": calendar_screen}
+           "report": report_screen, "calendar": calendar_screen, "cross_report": cross_report_screen}
 if st.session_state.screen.startswith("jp_"):
     from japanese_ui import SCREENS
     screens.update(SCREENS)
