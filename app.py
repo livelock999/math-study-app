@@ -14,6 +14,7 @@ from learning import (USERS, generate_problems, init_db, make_attempt, new_id,
 from assessment import assess, recommended_problems
 from activity import JST, month_summary
 from words import guidance
+from furigana import READINGS
 
 st.set_page_config(page_title="さんすう・こくご れんしゅう", page_icon="📚", layout="centered")
 keyboard = components.declare_component("math_keyboard", path=str(Path(__file__).parent / "keyboard"))
@@ -167,6 +168,7 @@ def practice_screen():
         token += f":ui{interaction_revision}"
     last_answer = state["answers"][-1] if state["phase"] == "feedback" else None
     event = keyboard(
+        furigana=READINGS,
         token=token, phase=state["phase"], question=problem["question_text"],
         correct=last_answer["is_correct"] if last_answer else None,
         answer=last_answer["user_answer"] if last_answer else None,
