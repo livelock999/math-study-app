@@ -9,6 +9,7 @@
     .card { background: #f0f8fc; border: 2px solid #c4e1ed; border-radius: 24px;
       padding: 28px 16px; text-align: center; }
     .question { font-size: clamp(36px, 8vw, 64px); font-weight: 750; margin: 6px 0 24px; }
+    .story { font-size: 24px; line-height: 1.8; text-align: left; margin: 0 0 20px; }
     label { display: block; font-size: 20px; margin-bottom: 8px; }
     input { width: 170px; font-size: 42px; text-align: center; padding: 8px;
       border: 2px solid #648ca0; border-radius: 12px; background: white; }
@@ -30,6 +31,7 @@
     const root = document.getElementById('root');
     let currentToken = null;
     let shownAt = 0;
+    let currentQuestionId = null;
     let pending = false;
     let eventNumber = 0;
     function send(type, extra = {}) {
@@ -38,13 +40,14 @@
     function resize() {
       send('streamlit:setFrameHeight', {height: document.body.scrollHeight + 12});
     }
-    function submit(action, answer = null) {
+    function submit(action, answer = null, selectedOperation = null) {
       if (pending) return;
       pending = true;
-      root.querySelector('button').disabled = true;
+      root.querySelectorAll('button').forEach(button => button.disabled = true);
       send('streamlit:setComponentValue', {value: {
         token: currentToken, event_id: `${currentToken}:${++eventNumber}`,
-        action, answer, response_time_sec: (performance.now() - shownAt) / 1000
+        action, answer, selected_operation: selectedOperation,
+        response_time_sec: (performance.now() - shownAt) / 1000
       }});
     }
     window.addEventListener('message', (event) => {
@@ -52,18 +55,33 @@
       const args = event.data.args;
       if (args.token === currentToken) {
         pending = false;
-        const button = root.querySelector('button');
-        if (button) button.disabled = false;
+        root.querySelectorAll('button').forEach(button => button.disabled = false);
         return;
       }
       currentToken = args.token;
+      if (args.word_problem && args.question_id !== currentQuestionId) {
+        currentQuestionId = args.question_id;
+        shownAt = performance.now();
+      }
       pending = false;
       root.replaceChildren();
       const card = document.createElement('div'); card.className = 'card';
-      const question = document.createElement('div'); question.className = 'question';
+      const question = document.createElement('div'); question.className = args.word_problem ? 'story' : 'question';
       question.textContent = args.question; card.append(question);
+      if (args.word_problem && args.equation) {
+        const equation = document.createElement('div'); equation.className = 'question';
+        equation.textContent = args.equation; card.append(equation);
+      }
       const button = document.createElement('button'); button.type = 'button';
-      if (args.phase === 'question') {
+      if (args.phase === 'choose') {
+        const instruction = document.createElement('p'); instruction.textContent = 'たす？ ひく？';
+        const subtract = document.createElement('button'); subtract.type = 'button';
+        button.textContent = 'たす ＋'; subtract.textContent = 'ひく −';
+        button.onclick = () => submit('choose_operation', null, 'addition');
+        subtract.onclick = () => submit('choose_operation', null, 'subtraction');
+        card.append(instruction, button, subtract);
+        requestAnimationFrame(() => button.focus());
+      } else if (args.phase === 'question') {
         const label = document.createElement('label'); label.htmlFor = 'answer'; label.textContent = 'こたえ';
         const input = document.createElement('input');
         input.id = 'answer'; input.type = 'text'; input.inputMode = 'numeric';
@@ -84,7 +102,7 @@
           submit('answer', Number(input.value));
         };
         card.append(label, input, error, button);
-        requestAnimationFrame(() => { input.focus(); shownAt = performance.now(); });
+        requestAnimationFrame(() => { input.focus(); if (!args.word_problem) shownAt = performance.now(); });
       } else {
         const feedback = document.createElement('p');
         feedback.className = `feedback ${args.correct ? 'correct' : 'wrong'}`;
@@ -98,7 +116,7 @@
         requestAnimationFrame(() => button.focus());
       }
       const help = document.createElement('p'); help.className = 'help';
-      help.textContent = args.phase === 'question'
+      help.textContent = args.phase === 'choose' ? 'たす・ひくの ボタンを えらぼう ／ Tabで うつる ／ Enterで きめる' : args.phase === 'question'
         ? 'すうじ・テンキーで にゅうりょく ／ Enterで こたえる ／ Backspaceで けす'
         : 'Enter または ボタンで すすもう';
       card.append(help); root.append(card); resize();
@@ -106,7 +124,11 @@
     document.addEventListener('keydown', event => {
       if (event.key === 'Enter' && !event.isComposing) {
         event.preventDefault();
-        if (!event.repeat) root.querySelector('button')?.click();
+        if (!event.repeat) {
+          const focused = document.activeElement;
+          const button = focused?.tagName === 'BUTTON' ? focused : root.querySelector('button');
+          button?.click();
+        }
       }
     });
     window.addEventListener('resize', resize);
