@@ -17,6 +17,10 @@
     .operator-options { display: flex; gap: 8px; justify-content: center; }
     .operator-options button { margin: 12px 0 0; padding: 12px 16px; font-size: 20px; }
     .operator-options button[aria-pressed="false"] { background: #687e8c; }
+    .guidance { margin: 20px 0 0; padding: 14px; border-radius: 12px; background: #fff3c9;
+      font-size: 20px; line-height: 1.7; text-align: left; }
+    .navigation { display: flex; gap: 8px; justify-content: center; }
+    .navigation button { font-size: 17px; padding: 12px; background: #536d7b; }
     label { display: block; font-size: 20px; margin-bottom: 8px; }
     input { width: 170px; font-size: 42px; text-align: center; padding: 8px;
       border: 2px solid #648ca0; border-radius: 12px; background: white; }
@@ -42,20 +46,49 @@
     let pending = false;
     let eventNumber = 0;
     let defaultActionButton = null;
+    let currentArgs = {};
+    let draftOperation = null;
+    let focusTimers = [];
+    let userInteracted = false;
     function send(type, extra = {}) {
       window.parent.postMessage({isStreamlitMessage: true, type, ...extra}, '*');
     }
     function resize() {
       send('streamlit:setFrameHeight', {height: document.body.scrollHeight + 12});
     }
+    function focusInitial(element) {
+      userInteracted = false;
+      const token = currentToken;
+      for (const delay of [0, 80, 220, 500]) {
+        focusTimers.push(setTimeout(() => {
+          if (token === currentToken && element.isConnected && !userInteracted) {
+            // iframe自身をフォーカスしてから入力へ。親DOMにはアクセスしません。
+            window.focus(); element.focus({preventScroll: true});
+          }
+        }, delay));
+      }
+    }
+    function captureDraft() {
+      const previous = currentArgs.draft || {};
+      return {
+        answer: document.getElementById('answer')?.value ?? previous.answer ?? '',
+        equation_left: document.getElementById('equation_left')?.value ?? previous.equation_left ?? '',
+        equation_right: document.getElementById('equation_right')?.value ?? previous.equation_right ?? '',
+        selected_operation: draftOperation,
+        elapsed_sec: (performance.now() - shownAt) / 1000,
+        hint_used: Boolean(currentArgs.hint_used), hint_visible: Boolean(currentArgs.hint_visible),
+        explanation_visible: Boolean(currentArgs.explanation_visible)
+      };
+    }
     function submit(action, answer = null, selectedOperation = null, extra = {}) {
       if (pending) return;
       pending = true;
+      if (selectedOperation) draftOperation = selectedOperation;
       root.querySelectorAll('button').forEach(button => button.disabled = true);
       send('streamlit:setComponentValue', {value: {
         token: currentToken, event_id: `${currentToken}:${++eventNumber}`,
         action, answer, selected_operation: selectedOperation,
-        response_time_sec: (performance.now() - shownAt) / 1000, ...extra
+        response_time_sec: (performance.now() - shownAt) / 1000, draft: captureDraft(), ...extra
       }});
     }
     window.addEventListener('message', (event) => {
@@ -67,9 +100,12 @@
         return;
       }
       currentToken = args.token;
-      if (args.word_problem && args.question_id !== currentQuestionId) {
+      focusTimers.forEach(clearTimeout); focusTimers = [];
+      currentArgs = args;
+      draftOperation = args.draft?.selected_operation || args.selected_operation || null;
+      if (args.question_id !== currentQuestionId || typeof args.elapsed_sec === 'number') {
         currentQuestionId = args.question_id;
-        shownAt = performance.now();
+        shownAt = performance.now() - (Number(args.elapsed_sec) || 0) * 1000;
       }
       pending = false;
       root.replaceChildren();
@@ -89,17 +125,18 @@
         button.onclick = () => submit('choose_operation', null, 'addition');
         subtract.onclick = () => submit('choose_operation', null, 'subtraction');
         card.append(instruction, button, subtract);
-        requestAnimationFrame(() => button.focus());
+        focusInitial(button);
       } else if (args.phase === 'equation') {
         const instruction = document.createElement('p'); instruction.textContent = 'ぶんしょうを よんで しきを つくろう';
         const options = document.createElement('div'); options.className = 'operator-options';
         const add = document.createElement('button'); add.type = 'button'; add.textContent = 'たす ＋';
         const subtract = document.createElement('button'); subtract.type = 'button'; subtract.textContent = 'ひく −';
-        let operation = args.selected_operation || 'addition';
+        let operation = draftOperation || 'addition';
         const editor = document.createElement('div'); editor.className = 'equation-editor';
         const symbol = document.createElement('span'); symbol.style.fontSize = '32px';
         function chooseOperation(value) {
           operation = value;
+          draftOperation = value;
           symbol.textContent = value === 'addition' ? '+' : '−';
           add.setAttribute('aria-pressed', String(value === 'addition'));
           subtract.setAttribute('aria-pressed', String(value === 'subtraction'));
@@ -108,8 +145,8 @@
         chooseOperation(operation); options.append(add, subtract);
         const error = document.createElement('p'); error.className = 'error'; error.setAttribute('role', 'alert');
         const fields = [];
-        for (const [id, title, initial] of [['equation_left', 'ひだりの かず', args.equation_left],
-                                         ['equation_right', 'みぎの かず', args.equation_right]]) {
+        for (const [id, title, initial] of [['equation_left', 'ひだりの かず', args.draft?.equation_left ?? args.equation_left],
+                                         ['equation_right', 'みぎの かず', args.draft?.equation_right ?? args.equation_right]]) {
           const group = document.createElement('div');
           const label = document.createElement('label'); label.htmlFor = id; label.textContent = title;
           const input = document.createElement('input'); input.id = id; input.type = 'text'; input.inputMode = 'numeric';
@@ -130,12 +167,13 @@
                  {equation_left: Number(fields[0].value), equation_right: Number(fields[1].value)});
         };
         card.append(instruction, options, editor, error, button);
-        requestAnimationFrame(() => fields[0].focus());
+        focusInitial(fields[0]);
       } else if (args.phase === 'question') {
         const label = document.createElement('label'); label.htmlFor = 'answer'; label.textContent = 'こたえ';
         const input = document.createElement('input');
         input.id = 'answer'; input.type = 'text'; input.inputMode = 'numeric';
         input.autocomplete = 'off'; input.maxLength = 3;
+        input.value = args.draft?.answer || '';
         input.setAttribute('aria-describedby', 'error');
         const error = document.createElement('p'); error.id = 'error'; error.className = 'error';
         error.setAttribute('role', 'alert');
@@ -156,7 +194,7 @@
           const edit = document.createElement('button'); edit.type = 'button'; edit.textContent = 'しきを なおす';
           edit.onclick = () => submit('edit_equation'); card.append(edit);
         }
-        requestAnimationFrame(() => { input.focus(); if (!args.word_problem) shownAt = performance.now(); });
+        focusInitial(input);
       } else {
         const feedback = document.createElement('p');
         feedback.className = `feedback ${args.correct ? 'correct' : 'wrong'}`;
@@ -167,7 +205,32 @@
         button.textContent = args.last ? 'けっかを みる ↵' : 'つぎへ ↵';
         button.onclick = () => submit('next');
         card.append(feedback, detail, button);
-        requestAnimationFrame(() => button.focus());
+        focusInitial(button);
+      }
+      // 新しいPython側が準備できているときだけ、途中状態を同期する補助操作を表示します。
+      if (typeof args.hint_text === 'string') {
+        if (args.phase !== 'feedback') {
+          if (args.hint_visible) {
+            const hint = document.createElement('p'); hint.className = 'guidance'; hint.textContent = args.hint_text;
+            card.append(hint);
+          } else {
+            const hintButton = document.createElement('button'); hintButton.type = 'button'; hintButton.textContent = 'ヒントを みる';
+            hintButton.onclick = () => submit('show_hint'); card.append(hintButton);
+          }
+        } else if (args.explanation_visible) {
+          const explanation = document.createElement('p'); explanation.className = 'guidance';
+          explanation.textContent = args.explanation_text; card.append(explanation);
+        } else {
+          const explanationButton = document.createElement('button'); explanationButton.type = 'button';
+          explanationButton.textContent = 'かんがえかた'; explanationButton.onclick = () => submit('show_explanation');
+          card.append(explanationButton);
+        }
+        const navigation = document.createElement('div'); navigation.className = 'navigation';
+        for (const [label, action] of [['もどる', 'pause'], ['学習履歴', 'open_history']]) {
+          const link = document.createElement('button'); link.type = 'button'; link.textContent = label;
+          link.onclick = () => submit(action); navigation.append(link);
+        }
+        card.append(navigation);
       }
       const help = document.createElement('p'); help.className = 'help';
       help.textContent = args.phase === 'choose' ? 'たす・ひくの ボタンを えらぼう ／ Tabで うつる ／ Enterで きめる'
@@ -177,6 +240,7 @@
       card.append(help); root.append(card); resize();
     });
     document.addEventListener('keydown', event => {
+      userInteracted = true;
       if (event.key === 'Enter' && !event.isComposing) {
         event.preventDefault();
         if (!event.repeat) {
@@ -189,6 +253,8 @@
         }
       }
     });
+    document.addEventListener('pointerdown', () => userInteracted = true);
+    window.addEventListener('blur', () => userInteracted = true);
     window.addEventListener('resize', resize);
     send('streamlit:componentReady', {apiVersion: 1});
   </script>
