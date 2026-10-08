@@ -15,6 +15,7 @@ from text_display import component_display, plain_label
 from practice_mode import is_test_mode, is_test_round, write_learning_answer
 from daily_review import plan_japanese
 from parent_insights import adaptive_japanese, japanese_hint_steps, review_forecast
+from ui_theme import card_heading
 
 keyboard = components.declare_component("japanese_keyboard", path=str(Path(__file__).parent / "japanese_keyboard"))
 
@@ -115,81 +116,91 @@ def settings():
         if st.button("つづきから", key="jp_resume", type="primary", use_container_width=True):
             paused["paused"] = False
             goto("jp_practice")
-    categories = {"mix": "おまかせ", **CATEGORIES}
-    category = st.radio("れんしゅうする こと", list(categories), format_func=categories.get, key="jp_category")
-    particle_level = None
-    if category == "particles":
-        from particles import LEVELS
-        particle_level = st.radio("てにをはの レベル", [None, 1, 2, 3],
-                                  format_func=lambda n: "おまかせ" if n is None else LEVELS[n], key="jp_particle_level")
-    count = st.radio("もんだいの かず", [5, 10], index=1, format_func=lambda n: f"{n}もん",
-                     horizontal=True, key="jp_count")
-    if st.button(plain_label("こくご スタート", st.session_state.user_id), key="jp_start", type="primary", use_container_width=True):
-        start(jp.choose_questions(category, count, particle_level=particle_level))
-    if st.button("きょうの ふくしゅう", key="jp_daily_review", use_container_width=True):
-        records = load()
-        if records is not None:
-            try:
-                plan = plan_japanese(records, st.session_state.user_id, particle_level=particle_level, count=5)
-            except (ValueError, KeyError, TypeError):
-                st.error("復習の履歴を確認できませんでした。設定と履歴を確認してください。")
-            else:
-                if plan["items"]:
-                    start(plan["items"], "review", review_reasons=plan["reasons"])
-                else:
-                    st.info(plan["message"])
-    if st.button("にた もんだいで れんしゅう", key="jp_similar", use_container_width=True):
-        records = load()
-        if records is not None:
-            try:
-                plan = adaptive_japanese(records, st.session_state.user_id, particle_level=particle_level, count=5)
-            except (ValueError, KeyError, TypeError):
-                st.error("練習の履歴を確認できませんでした。設定と履歴を確認してください。")
-            else:
-                if plan["items"]:
-                    start(plan["items"], "weak_area", review_reasons=plan.get("reasons"))
-                else:
-                    st.info(plan["message"])
-    with st.expander("保護者向け：復習の予定"):
-        if st.button("復習の予定をみる", key="jp_review_forecast"):
+    review_card = st.container(key="review_card_japanese")
+    with st.container(key="practice_card_japanese"):
+        card_heading("📖", "こくごの れんしゅう", "ことばを よんで、かんがえてみよう。")
+        with st.expander("もんだいを えらぶ・せってい"):
+            categories = {"mix": "おまかせ", **CATEGORIES}
+            category = st.radio("れんしゅうする こと", list(categories), format_func=categories.get, key="jp_category")
+            particle_level = None
+            if category == "particles":
+                from particles import LEVELS
+                particle_level = st.radio("てにをはの レベル", [None, 1, 2, 3],
+                                          format_func=lambda n: "おまかせ" if n is None else LEVELS[n], key="jp_particle_level")
+            count = st.radio("もんだいの かず", [5, 10], index=1, format_func=lambda n: f"{n}もん",
+                             horizontal=True, key="jp_count")
+        st.caption(f"1かい {count}もん。あせらず やってみよう。")
+        if st.button(plain_label("こくご スタート", st.session_state.user_id), key="jp_start", type="primary", use_container_width=True):
+            start(jp.choose_questions(category, count, particle_level=particle_level))
+    with review_card:
+        card_heading("🌱", "きょうの ふくしゅう", "こくごを 5もん。おぼえた ことばを、もういちど。")
+        if st.button("きょうの ふくしゅう", key="jp_daily_review", use_container_width=True):
             records = load()
             if records is not None:
                 try:
-                    forecast = review_forecast(records, st.session_state.user_id, "japanese", particle_level=particle_level)
+                    plan = plan_japanese(records, st.session_state.user_id, particle_level=particle_level, count=5)
                 except (ValueError, KeyError, TypeError):
-                    st.error("復習の予定を確認できませんでした。設定と履歴を確認してください。")
+                    st.error("復習の履歴を確認できませんでした。設定と履歴を確認してください。")
                 else:
-                    st.write(f"きょう：{forecast['today_count']}問 ／ あした：{forecast['tomorrow_count']}問")
-                    st.caption("きょうの復習は1日5問まで。きょうの数は回答済みを除いた残りです。基本問題の補充は含みません。")
-    if st.button("にがてを れんしゅう", key="jp_weak", use_container_width=True):
-        records = load()
-        if records is not None:
-            from particles import analyze as analyze_particles
-            if category == "particles" or analyze_particles(records)["priority_pairs"]:
-                start(jp.choose_questions("particles", count, particle_level=particle_level, records=records), "weak_area")
-            report = jp.analyze(records)
-            if report["weak_categories"]:
-                start(jp.choose_questions("mix", count, report["weak_categories"], records=records), "weak_area")
-            else:
-                st.info("まだ にがてが みつかっていないよ。おまかせで れんしゅうしてね。")
-    if st.button("まちがえた もんだいを れんしゅう", key="jp_past_mistakes", use_container_width=True):
-        records = load()
-        if records is not None:
-            latest = {}
-            for record in records:  # 履歴は最新順。最後に正解した問題は除きます。
-                latest.setdefault(record["question_id"], record)
-            # 復習の回答は復習セットから再練習し、通常のchainへ混ぜません。
-            wrong = [r for r in latest.values() if not r["correct"]
-                     and r["selection_type"] not in ("review", "review_retry")]
-            if wrong:
-                wrong = wrong[:count]
-                st.session_state.jp_counts = {r["question_id"]: r["attempt_count"] for r in wrong}
-                st.session_state.jp_chains = {r["question_id"]: r["chain_id"] for r in wrong}
-                st.session_state.jp_first_correct = {r["question_id"]: r.get("first_try_correct", r["correct"]) for r in wrong}
-                start([snapshot(r) for r in wrong], "retry")
-            else:
-                st.info("いまは まちがえた もんだいが ないよ。")
-    navigation("jp_settings")
+                    if plan["items"]:
+                        start(plan["items"], "review", review_reasons=plan["reasons"])
+                    else:
+                        st.info(plan["message"])
+    with st.expander("もっと れんしゅう・ふくしゅうの よてい"):
+        if st.button("にた もんだいで れんしゅう", key="jp_similar", use_container_width=True):
+            records = load()
+            if records is not None:
+                try:
+                    plan = adaptive_japanese(records, st.session_state.user_id, particle_level=particle_level, count=5)
+                except (ValueError, KeyError, TypeError):
+                    st.error("練習の履歴を確認できませんでした。設定と履歴を確認してください。")
+                else:
+                    if plan["items"]:
+                        start(plan["items"], "weak_area", review_reasons=plan.get("reasons"))
+                    else:
+                        st.info(plan["message"])
+        with st.container():
+            st.caption("保護者向け：復習の予定")
+            if st.button("復習の予定をみる", key="jp_review_forecast"):
+                records = load()
+                if records is not None:
+                    try:
+                        forecast = review_forecast(records, st.session_state.user_id, "japanese", particle_level=particle_level)
+                    except (ValueError, KeyError, TypeError):
+                        st.error("復習の予定を確認できませんでした。設定と履歴を確認してください。")
+                    else:
+                        st.write(f"きょう：{forecast['today_count']}問 ／ あした：{forecast['tomorrow_count']}問")
+                        st.caption("きょうの復習は1日5問まで。きょうの数は回答済みを除いた残りです。基本問題の補充は含みません。")
+        if st.button("にがてを れんしゅう", key="jp_weak", use_container_width=True):
+            records = load()
+            if records is not None:
+                from particles import analyze as analyze_particles
+                if category == "particles" or analyze_particles(records)["priority_pairs"]:
+                    start(jp.choose_questions("particles", count, particle_level=particle_level, records=records), "weak_area")
+                report = jp.analyze(records)
+                if report["weak_categories"]:
+                    start(jp.choose_questions("mix", count, report["weak_categories"], records=records), "weak_area")
+                else:
+                    st.info("まだ にがてが みつかっていないよ。おまかせで れんしゅうしてね。")
+        if st.button("まちがえた もんだいを れんしゅう", key="jp_past_mistakes", use_container_width=True):
+            records = load()
+            if records is not None:
+                latest = {}
+                for record in records:  # 履歴は最新順。最後に正解した問題は除きます。
+                    latest.setdefault(record["question_id"], record)
+                # 復習の回答は復習セットから再練習し、通常のchainへ混ぜません。
+                wrong = [r for r in latest.values() if not r["correct"]
+                         and r["selection_type"] not in ("review", "review_retry")]
+                if wrong:
+                    wrong = wrong[:count]
+                    st.session_state.jp_counts = {r["question_id"]: r["attempt_count"] for r in wrong}
+                    st.session_state.jp_chains = {r["question_id"]: r["chain_id"] for r in wrong}
+                    st.session_state.jp_first_correct = {r["question_id"]: r.get("first_try_correct", r["correct"]) for r in wrong}
+                    start([snapshot(r) for r in wrong], "retry")
+                else:
+                    st.info("いまは まちがえた もんだいが ないよ。")
+    with st.expander("がんばりの きろく"):
+        navigation("jp_settings")
     if st.button("さんすうへ", key="jp_math"):
         goto("settings")
     if st.button("なまえを かえる", key="jp_change_user"):
