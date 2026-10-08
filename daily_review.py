@@ -188,12 +188,14 @@ def _plan(pool, schedules, weak, subject, now, count):
     return {"items": items, "reasons": reasons, "message": message}
 
 
-def plan_math(records, user_id, limit=10, now=None, count=5):
+def plan_math(records, user_id, limit=10, now=None, count=5, candidate_pool=None):
     """現在の数の範囲の計算・文章題。教材を再生成し、履歴の本文は使わない。"""
     from learning import problem_pool
     from words import word_pool
     current = _now(now)
     rows = eligible_records(records, user_id, current)
+    if candidate_pool is not None:
+        return _limited_plan(candidate_pool, rows, user_id, "math", current, count)
     pool = []
     for operation in ("addition", "subtraction"):
         pool.extend(problem_pool(operation, limit))
@@ -201,12 +203,14 @@ def plan_math(records, user_id, limit=10, now=None, count=5):
     return _limited_plan(pool, rows, user_id, "math", current, count)
 
 
-def plan_japanese(records, user_id, particle_level=None, now=None, count=5):
+def plan_japanese(records, user_id, particle_level=None, now=None, count=5, candidate_pool=None):
     """国語は現行教材を使用。助詞の難度制限はミックスにも適用。"""
     from japanese_questions import QUESTIONS
     if particle_level not in (None, 1, 2, 3):
         raise ValueError("てにをはのレベルが不正です。")
     current = _now(now)
     rows = eligible_records(records, user_id, current)
+    if candidate_pool is not None:
+        return _limited_plan(candidate_pool, rows, user_id, "japanese", current, count)
     pool = [q for q in QUESTIONS if q["category"] != "particles" or particle_level is None or q["level"] <= particle_level]
     return _limited_plan(pool, rows, user_id, "japanese", current, count)

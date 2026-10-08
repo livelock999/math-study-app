@@ -35,7 +35,7 @@ def _goals(user_id, weekly_days, daily_questions):
     return {"user_id": user_id, "weekly_days": weekly_days, "daily_questions": daily_questions}
 
 
-def _cloud(request, label):
+def _cloud(request, label, sql_file="supabase_learning_extensions.sql"):
     try:
         with learning.supabase_urlopen(request, timeout=15) as response:
             if not 200 <= response.status < 300:
@@ -44,7 +44,7 @@ def _cloud(request, label):
                 return json.loads(response.read().decode("utf-8"))
     except HTTPError as error:
         if error.code == 404:
-            raise OSError(f"{label}の保存先が未設定です。Supabaseで supabase_learning_extensions.sql を実行してください。") from None
+            raise OSError(f"{label}の保存先が未設定です。Supabaseで {sql_file} を実行してください。") from None
         raise OSError(f"{label}をクラウドで処理できませんでした。接続と保存先設定を確認し、再試行してください。") from None
     except (URLError, OSError, ValueError, TypeError, AttributeError):
         raise OSError(f"{label}をクラウドで処理できませんでした。接続と保存先設定を確認し、再試行してください。") from None

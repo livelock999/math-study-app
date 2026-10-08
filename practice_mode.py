@@ -22,7 +22,7 @@ def switch_mode(session, enabled):
     keys = {"round", "jp_round", "attempt_counts", "jp_counts", "jp_first_correct",
             "jp_chains", "user_id", "practice_count", "display_profiles", "answer_keyboard", "jp_keyboard"}
     for key in list(session):
-        if key in keys or key.startswith(("display_", "learning_goal_", "parent_goals_", "feedback_", "math_feedback_", "jp_feedback_")):
+        if key in keys or key.startswith(("display_", "learning_goal_", "parent_goals_", "feedback_", "math_feedback_", "jp_feedback_", "school_scope_")):
             session.pop(key, None)
     session["parent_test_mode"] = enabled
     session["screen"] = "user"

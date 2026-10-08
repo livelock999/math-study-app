@@ -214,7 +214,7 @@ def _jp_pool(particle_level):
     return [q for q in QUESTIONS if q["category"] != "particles" or particle_level is None or q["level"] <= particle_level]
 
 
-def review_forecast(records, user_id, subject, now=None, limit=10, particle_level=None):
+def review_forecast(records, user_id, subject, now=None, limit=10, particle_level=None, candidate_pool=None):
     """基本問題の補充を含めず、実際の復習予定数を日別に示します。"""
     current = _now(now)
     records = list(records)
@@ -224,6 +224,8 @@ def review_forecast(records, user_id, subject, now=None, limit=10, particle_leve
         pool, id_field = _jp_pool(particle_level), "question_id"
     else:
         raise ValueError("教科が不正です。")
+    if candidate_pool is not None:
+        pool = candidate_pool
     identifiers = {q[id_field] for q in pool}
     states = schedule(records, user_id, subject, current)
     budget = daily_budget(records, user_id, subject, current)
