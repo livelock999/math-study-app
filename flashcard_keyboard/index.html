@@ -53,6 +53,7 @@ window.addEventListener('message',event=>{
     const no=button('ちがう、いいなおす',()=>emit('correct_voice'));
     card.append(yes,no,paragraph('いいなおすと、声でもテンキーでも答えられます。'));focusInitial(no);
   }else{
+    if(args.previous_correct===true)card.append(paragraph('○ まえのカード せいかい','note'));
     if(args.voice_failures)card.append(paragraph('声をたしかめられませんでした。もういちど、またはテンキーで答えてね。'));
     const input=document.createElement('input');input.id='answer';input.type='text';input.inputMode='numeric';input.maxLength=2;
     input.autocomplete='off';input.setAttribute('aria-label','こたえ');
@@ -65,17 +66,32 @@ window.addEventListener('message',event=>{
     card.append(input,error,button('こたえる ↵',answer));
     const SpeechRecognition=window.SpeechRecognition||window.webkitSpeechRecognition;
     if(SpeechRecognition){
+      const heard=paragraph('','note');heard.setAttribute('role','status');heard.setAttribute('aria-live','polite');card.append(heard);
       let mic;
       function startVoice(manual=false){
         if(recognition||pending||document.visibilityState==='hidden')return;
         if(manual){voiceEnabled=true;stop.disabled=false}
         if(!voiceEnabled)return;
         const token=currentToken;const active=new SpeechRecognition();recognition=active;
-        active.lang='ja-JP';active.continuous=false;active.interimResults=false;active.maxAlternatives=1;
-        mic.disabled=true;mic.textContent='きいているよ…';let delivered=false;
+        active.lang='ja-JP';active.continuous=false;active.interimResults=true;active.maxAlternatives=1;
+        mic.disabled=true;mic.textContent='マイクの じゅんび…';let delivered=false,finishRequested=false;
+        active.onaudiostart=()=>{
+          if(token===currentToken&&!pending&&recognition===active)mic.textContent='きいているよ…';
+        };
+        active.onspeechend=()=>{
+          if(token!==currentToken||delivered||recognition!==active||finishRequested)return;
+          finishRequested=true;
+          // 発話が終わったら確定を依頼。途中の読み取りを採点には使わない。
+          try{active.stop()}catch(error){}
+        };
         active.onresult=result=>{
-          if(token!==currentToken||delivered||recognition!==active)return;delivered=true;
-          const text=result.results?.[0]?.[0]?.transcript||'';
+          if(token!==currentToken||delivered||recognition!==active)return;
+          const spoken=result.results?.[result.resultIndex||0];
+          const text=spoken?.[0]?.transcript||'';
+          heard.textContent=text?`「${text}」${spoken?.isFinal===true?' を たしかめているよ…':'…'}`:'こえを たしかめているよ…';
+          resize();
+          if(spoken?.isFinal!==true)return;
+          delivered=true;
           emit('answer',{input_method:'voice',recognized_text:text});
         };
         active.onerror=error=>{
@@ -93,7 +109,7 @@ window.addEventListener('message',event=>{
       const stop=button('こえを とめる',()=>{voiceEnabled=false;emit('voice_off')});
       stop.disabled=!voiceEnabled;card.append(stop);
       if(voiceEnabled){
-        voiceTimer=setTimeout(()=>startVoice(),350);
+        voiceTimer=setTimeout(()=>startVoice(),0);
       }
     }else card.append(paragraph('このブラウザーでは声で答えられません。下のテンキーを使ってね。'));
     const keys=document.createElement('div');keys.className='keys';
