@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
     * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
     body { margin: 0; font-family: system-ui, sans-serif; color: #183647; }
     .card { background: #f0f8fc; border: 2px solid #c4e1ed; border-radius: 24px;
       padding: 28px 16px; text-align: center; }
@@ -148,6 +149,7 @@
         selected_operation: draftOperation,
         elapsed_sec: (performance.now() - shownAt) / 1000,
         hint_used: Boolean(currentArgs.hint_used), hint_visible: Boolean(currentArgs.hint_visible),
+        hint_level: Number(currentArgs.hint_level) || 0,
         explanation_visible: Boolean(currentArgs.explanation_visible), reading_help_used: readingHelpUsed
       };
     }
@@ -274,9 +276,10 @@
         const feedback = document.createElement('p');
         feedback.className = `feedback ${args.correct ? 'correct' : 'wrong'}`;
         feedback.setAttribute('role', 'status');
-        renderText(feedback, args.correct ? '○ せいかい！' : 'もういちど かんがえてみよう');
+        renderText(feedback, args.dont_know_used ? 'わからないを えらんだね。いっしょに たしかめよう。'
+          : args.correct ? '○ せいかい！' : 'もういちど かんがえてみよう');
         const detail = document.createElement('p');
-        renderText(detail, `あなたの こたえ：${args.answer}`);
+        renderText(detail, `あなたの こたえ：${args.dont_know_used ? 'わからない' : args.answer}`);
         renderText(button, args.last ? 'けっかを みる ↵' : 'つぎへ ↵');
         button.onclick = () => submit('next');
         card.append(feedback, detail, button);
@@ -286,12 +289,19 @@
       if (typeof args.hint_text === 'string') {
         if (args.phase !== 'feedback') {
           if (args.hint_visible) {
-            const hint = document.createElement('p'); hint.className = 'guidance'; renderText(hint, args.hint_text, 'hint_text');
+            const hint = document.createElement('p'); hint.className = 'guidance';
+            renderText(hint, `ヒント ${Number(args.hint_level) || 1} / 3\n${args.hint_text}`, 'hint_text');
             card.append(hint);
-          } else {
-            const hintButton = document.createElement('button'); hintButton.type = 'button'; renderText(hintButton, 'ヒントを みる');
+          }
+          if ((Number(args.hint_level) || 0) < 3) {
+            const hintButton = document.createElement('button'); hintButton.type = 'button';
+            renderText(hintButton, !args.hint_visible ? 'ヒントを みる'
+              : (Number(args.hint_level) || 0) < 2 ? 'もうすこし ヒント' : 'ときかたの ヒント');
             hintButton.onclick = () => submit('show_hint'); card.append(hintButton);
           }
+          const unknown = document.createElement('button'); unknown.type = 'button';
+          renderText(unknown, 'わからない'); unknown.style.background = '#536d7b';
+          unknown.onclick = () => submit('dont_know'); card.append(unknown);
         } else if (args.explanation_visible) {
           const explanation = document.createElement('p'); explanation.className = 'guidance';
           renderText(explanation, args.explanation_text, 'explanation_text'); card.append(explanation);
