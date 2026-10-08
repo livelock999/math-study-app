@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
     * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
     body { margin: 0; color: #253d42; font-family: system-ui, sans-serif; }
     .card { background: #f1faf5; border: 2px solid #bddbcd; border-radius: 20px; padding: 20px 16px; }
     .story { font-size: clamp(22px, 5vw, 28px); line-height: 1.9; white-space: pre-wrap; margin: 0 0 20px; }
@@ -30,7 +31,7 @@
 <script>
 const root = document.getElementById('root');
 let token = null, questionId = null, shownAt = 0, phase = null;
-let pending = false, hintUsed = false, order = [], choices = [], form = null;
+let pending = false, hintUsed = false, hintLevel = 0, order = [], choices = [], form = null;
 let chooseOption = null, nextAction = null, redrawOrder = null, eventNumber = 0;
 let elapsedBefore = 0, resumeToken = null;
 let currentArgs = {}, readingHelpUsed = false;
@@ -108,7 +109,7 @@ function submit(action, answer = null) {
   root.querySelectorAll('button').forEach(b => b.disabled = true);
   send('streamlit:setComponentValue', {value: {token, event_id: `${token}:${++eventNumber}`, action, answer,
     response_time_sec: elapsedBefore + (performance.now() - shownAt) / 1000,
-    hint_used: hintUsed, reading_help_used: readingHelpUsed, draft_order: [...order]}});
+    hint_used: hintUsed, hint_level: hintLevel, reading_help_used: readingHelpUsed, draft_order: [...order]}});
 }
 function element(tag, text, className = '', fieldName = null) {
   const result = document.createElement(tag); renderText(result, text, fieldName); result.className = className; return result;
@@ -129,6 +130,7 @@ window.addEventListener('message', event => {
   if (questionId !== args.question_id || (args.token.includes(':resume') && resumeToken !== args.token)) {
     questionId = args.question_id; resumeToken = args.token;
     hintUsed = args.draft?.hint_used === true; readingHelpUsed = args.draft?.reading_help_used === true; order = [...(args.draft?.order || [])];
+    hintLevel = Math.max(0, Math.min(3, Number(args.draft?.hint_level) || (hintUsed ? 1 : 0)));
     elapsedBefore = args.draft?.elapsed || 0; shownAt = performance.now();
   }
   readingHelpUsed = readingHelpUsed || args.draft?.reading_help_used === true || args.reading_help_used === true;
@@ -162,17 +164,27 @@ window.addEventListener('message', event => {
       chooseOption = i => { if (i >= 0 && i < choices.length) submit('answer', i); };
       choices.forEach((choice, i) => card.append(button(`${i + 1}　${choice}`, () => chooseOption(i), '', 'choices')));
     }
-    const hint = element('p', '', 'hint'); hint.hidden = !hintUsed;
-    if (hintUsed) renderText(hint, args.hint, 'hint');
+    const steps = Array.isArray(args.hint_steps) && args.hint_steps.length === 3 ? args.hint_steps : [args.hint, args.hint, args.hint];
+    const hint = element('p', '', 'hint'); hint.hidden = hintLevel === 0;
+    if (hintLevel) renderText(hint, `ヒント ${hintLevel} / 3\n${steps[hintLevel - 1]}`, 'hint');
     const hintButton = button('ヒントを みる', () => {
-      hintUsed = true; renderText(hint, args.hint, 'hint'); hint.hidden = false; resize();
+      hintLevel = Math.min(3, hintLevel + 1); hintUsed = true;
+      renderText(hint, `ヒント ${hintLevel} / 3\n${steps[hintLevel - 1]}`, 'hint'); hint.hidden = false;
+      updateHintButton(); resize();
     }, 'secondary');
+    function updateHintButton() {
+      hintButton.hidden = hintLevel >= 3;
+      renderText(hintButton, hintLevel === 0 ? 'ヒントを みる' : hintLevel === 1 ? 'もうすこし ヒント' : 'ときかたの ヒント');
+    }
+    updateHintButton();
     card.append(hintButton, hint);
+    card.append(button('わからない', () => submit('dont_know'), 'secondary'));
     card.append(element('p', form === 'ordering'
       ? '1・2・3 または タッチで じゅんばんに えらぼう。Enterで こたえる。Backspaceで 1こ もどす。'
       : `${choices.map((_, i) => i + 1).join('・')} の キーや テンキー、タッチで こたえよう。Tabと Enterでも えらべるよ。`, 'help'));
   } else {
-    const feedback = element('p', args.correct ? '○ せいかい！' : '× もういちど れんしゅうしよう',
+    const feedback = element('p', args.dont_know_used ? 'わからないを えらんだね。いっしょに たしかめよう。'
+      : args.correct ? '○ せいかい！' : '× もういちど れんしゅうしよう',
                              `feedback ${args.correct ? 'correct' : 'wrong'}`);
     feedback.setAttribute('role', 'status');
     card.append(feedback, element('p', `あなたの こたえ：${args.selected}`, 'explanation', 'selected'));
