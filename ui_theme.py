@@ -34,7 +34,7 @@ def apply_theme():
     [data-testid="stDownloadButton"] button { min-height: 48px; border-radius: 14px;
       border-color: #d3ded5; color: var(--ink); font-weight: 650; transition: background .15s; }
     [data-testid="stButton"] button[kind="primary"],
-    [data-testid="stFormSubmitButton"] button[kind="primary"] {
+    [data-testid="stFormSubmitButton"] button[kind^="primary"] {
       background: #24483e; color: #fffdf7; border-color: #24483e; }
     [data-testid="stButton"] button:hover { border-color: #698a72; background: #edf4e7; }
     [data-testid="stButton"] button[kind="primary"]:hover { background: #315c4e; color: white; }
