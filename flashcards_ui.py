@@ -72,7 +72,18 @@ def persist_pending(state):
     state["pending"] = None
     state["candidate"] = None
     state["phase"] = "saved"
+    if state.pop("advance_after_save", False):
+        advance_saved_card(state)
     return True
+
+
+def advance_saved_card(state):
+    """保存済み回答だけで進行。連続音声では中間画面の往復を省きます。"""
+    if state["index"] + 1 == len(state["cards"]):
+        state["phase"] = "finished"
+        return
+    state.update(index=state["index"] + 1, phase="question", revision=0,
+                 elapsed_sec=0, voice_failures=0)
 
 
 def queue_answer(state, answer, method, transcript, seconds):
@@ -96,6 +107,8 @@ def queue_answer(state, answer, method, transcript, seconds):
                                           state["session_elapsed_sec"] + record["response_time_sec"]),
                   total_recognition_retry_count=state["total_voice_failures"])
     state["pending"] = record
+    # 正解した連続音声だけを即時に進める。失敗時もこの方針と同じ回答IDを保持。
+    state["advance_after_save"] = method == "voice" and state["voice_enabled"] and record["is_correct"]
     persist_pending(state)
 
 
@@ -103,6 +116,8 @@ def practice_screen():
     state = st.session_state.fc_round
     if state["user_id"] != st.session_state.user_id:
         goto("flashcard_settings")
+    if state["phase"] == "finished":
+        goto("flashcard_results")
     index = state["index"]
     problem = state["cards"][index]
     st.caption(f"{learning.USERS[state['user_id']]} ／ けいさんカード ／ {index + 1} / {len(state['cards'])}")
@@ -120,6 +135,8 @@ def practice_screen():
                      question=problem["question_text"], correct=last["is_correct"] if last else None,
                      candidate=state["candidate"]["answer"] if state["candidate"] else None,
                      elapsed_sec=state["elapsed_sec"], voice_failures=state["voice_failures"],
+                     previous_correct=(state["answers"][-1]["is_correct"]
+                                       if state["phase"] == "question" and index > 0 else None),
                      voice_enabled=state["voice_enabled"], key="fc_keyboard", default=None)
     if not isinstance(event, dict) or event.get("token") != token:
         return
@@ -136,9 +153,7 @@ def practice_screen():
         state["revision"] += 1
         st.rerun()
     if state["phase"] == "saved" and action == "next":
-        if index + 1 == len(state["cards"]):
-            goto("flashcard_results")
-        state.update(index=index + 1, phase="question", revision=0, elapsed_sec=0, voice_failures=0)
+        advance_saved_card(state)
         st.rerun()
     if state["phase"] == "confirm":
         if action == "confirm_voice":

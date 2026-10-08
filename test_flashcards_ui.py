@@ -170,13 +170,82 @@ class FlashcardUIAppTests(unittest.TestCase):
         self.assertTrue(row['is_correct'])
         self.assertEqual(row['parsed_answer'], number)
         self.assertEqual(row['recognized_text'], str(number))
-        self.event('next', voice_enabled=True)
+        self.assertEqual(state['index'], 1)  # 保存後の中間画面・next往復を省く。
+        self.assertEqual(state['phase'], 'question')
+        self.assertTrue(self.keyboard.call_args.kwargs['previous_correct'])
         self.assertTrue(state['voice_enabled'])
         self.assertTrue(self.keyboard.call_args.kwargs['voice_enabled'])
         self.event('voice_off', voice_enabled=False)
         self.assertFalse(state['voice_enabled'])
         self.assertEqual(len(self.rows()), 1)
         self.assertEqual(state['index'], 1)
+
+    def test_fast_voice_save_retry_advances_once_with_same_id_and_ignores_old_event(self):
+        state = self.app.session_state.fc_round
+        self.lost = True
+        old = self.event('answer', input_method='voice', voice_enabled=True,
+                         recognized_text=str(state['cards'][0]['correct_answer']))
+        pending = deepcopy(state['pending'])
+        self.assertEqual(state['index'], 0)
+        self.assertEqual(len(state['answers']), 0)
+        self.assertTrue(state['advance_after_save'])
+        self.click('fc_retry_save')
+        self.assertEqual(state['index'], 1)
+        self.assertEqual(len(state['answers']), 1)
+        self.assertEqual(len(self.rows()), 1)
+        self.assertEqual(self.rows()[0]['attempt_id'], pending['attempt_id'])
+        self.keyboard.return_value = old
+        self.app.run()
+        self.keyboard.return_value = None
+        self.assertEqual(state['index'], 1)
+        self.assertEqual(len(self.rows()), 1)
+
+    def test_fast_voice_round_finishes_and_keeps_test_answers_out_of_history(self):
+        self.app.session_state.parent_test_mode = True
+        self.app.session_state.screen = 'flashcard_settings'
+        self.app.run()
+        self.app.select_slider(key='fc_count').set_value(5).run()
+        self.click('fc_start')
+        # セット開始時のおためしを固定し、途中の設定変更でも本番へ書かない。
+        self.app.session_state.parent_test_mode = False
+        state = self.app.session_state.fc_round
+        self.assertEqual(len(state['cards']), 5)
+        for index in range(5):
+            self.assertEqual(state['index'], index)
+            self.event('answer', input_method='voice', voice_enabled=True,
+                       recognized_text=str(state['cards'][index]['correct_answer']))
+        self.assertEqual(self.app.session_state.screen, 'flashcard_results')
+        self.assertEqual(len(state['answers']), 5)
+        self.assertEqual(self.rows(), [])
+        self.assertEqual(self.saved_calls, [])
+
+    def test_wrong_continuous_voice_requires_confirmation_and_keeps_saved_feedback(self):
+        state = self.app.session_state.fc_round
+        self.event('answer', input_method='voice', voice_enabled=True, recognized_text='0')
+        self.assertEqual(state['phase'], 'confirm')
+        self.assertEqual(state['index'], 0)
+        self.assertEqual(self.rows(), [])
+        self.event('confirm_voice', voice_enabled=True)
+        self.assertEqual(state['phase'], 'saved')
+        self.assertEqual(state['index'], 0)
+        self.assertFalse(self.rows()[0]['is_correct'])
+        self.event('next')
+        self.assertEqual(state['index'], 1)
+
+    def test_fast_voice_normal_round_saves_all_five_answers_and_finishes(self):
+        state = self.app.session_state.fc_round
+        for index in range(5):
+            self.assertEqual(state['index'], index)
+            self.assertEqual(state['phase'], 'question')
+            self.event('answer', input_method='voice', voice_enabled=True,
+                       recognized_text=str(state['cards'][index]['correct_answer']))
+        rows = self.rows()
+        self.assertEqual(self.app.session_state.screen, 'flashcard_results')
+        self.assertEqual(len(rows), 5)
+        self.assertEqual(len({row['attempt_id'] for row in rows}), 5)
+        self.assertEqual(sorted(row['question_order'] for row in rows), [1, 2, 3, 4, 5])
+        self.assertEqual(sum(row['round_completed'] for row in rows), 1)
+        self.assertTrue(all(row['is_correct'] and row['input_method'] == 'voice' for row in rows))
 
     def test_narrow_range_repeats_preserve_initial_false_and_report_groups(self):
         self.app.session_state.screen = 'flashcard_settings'
