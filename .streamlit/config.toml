@@ -5,4 +5,8 @@ toolbarMode = "minimal"
 gatherUsageStats = false
 
 [theme]
-primaryColor = "#126e87"
+primaryColor = "#24483e"
+backgroundColor = "#fffdf7"
+secondaryBackgroundColor = "#edf4e7"
+textColor = "#24483e"
+font = "sans serif"
