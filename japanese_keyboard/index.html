@@ -4,27 +4,47 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
+    :root { color-scheme: light; --ink: #24483e; --paper: #fffdf7; --sage: #d8ead2;
+      --subject: #fce7dc; --line: #d8e3dc; --muted: #64786e; }
     * { box-sizing: border-box; }
     [hidden] { display: none !important; }
-    body { margin: 0; color: #253d42; font-family: system-ui, sans-serif; }
-    .card { background: #f1faf5; border: 2px solid #bddbcd; border-radius: 20px; padding: 20px 16px; }
-    .story { font-size: clamp(22px, 5vw, 28px); line-height: 1.9; white-space: pre-wrap; margin: 0 0 20px; }
-    .question { font-size: 23px; line-height: 1.65; font-weight: 700; }
-    button { display: block; width: 100%; margin: 12px 0 0; padding: 14px 12px;
-      color: #fff; background: #237254; border: 0; border-radius: 12px;
-      font: inherit; font-size: 22px; text-align: left; cursor: pointer; }
-    button.secondary { background: #e2eee7; color: #253d42; font-size: 18px; }
-    button:disabled { opacity: .55; cursor: default; }
-    button:focus-visible { outline: 4px solid #da9212; outline-offset: 3px; }
-    .feedback { font-size: 27px; font-weight: 700; }
-    .correct { color: #146b3a; } .wrong { color: #8d4517; }
-    .help, .explanation { font-size: 17px; line-height: 1.7; }
-    .order { font-size: 21px; line-height: 1.8; min-height: 40px; }
-    .hint { font-size: 20px; line-height: 1.7; background: #fff5d6; padding: 12px; }
+    body { margin: 0; padding: 4px 4px 12px; color: var(--ink); background: transparent;
+      font-family: system-ui, "Yu Gothic", sans-serif; }
+    #root { min-width: 0; }
+    .card { min-width: 0; background: var(--paper); border: 1px solid var(--line); border-radius: 24px;
+      padding: clamp(18px, 5vw, 30px); box-shadow: 0 5px 18px #24483e0b; }
+    .story { font-size: clamp(22px, 5vw, 26px); line-height: 1.95; white-space: pre-wrap;
+      margin: 0 0 24px; padding: 20px 18px; background: var(--subject); border-radius: 20px; overflow-wrap: anywhere; }
+    .question { font-size: clamp(21px, 5vw, 25px); line-height: 1.85; font-weight: 700;
+      margin: 0 0 24px; padding: 0 2px; overflow-wrap: anywhere; }
+    button { display: block; width: 100%; min-height: 62px; margin: 14px 0 0; padding: 15px 18px;
+      color: var(--paper); background: var(--ink); border: 1px solid #24483e; border-radius: 18px;
+      font: inherit; font-size: 22px; line-height: 1.6; font-weight: 650; text-align: left; cursor: pointer;
+      overflow-wrap: anywhere; box-shadow: 0 3px 8px #24483e12;
+      transition: background-color .15s ease, box-shadow .15s ease; }
+    button.secondary { min-height: 54px; background: var(--sage); color: var(--ink); border-color: #cadfc6;
+      font-size: 18px; box-shadow: none; }
+    button:hover:not(:disabled) { box-shadow: 0 4px 12px #24483e20; }
+    button:disabled { opacity: .5; cursor: default; box-shadow: none; }
+    button:focus-visible { outline: 3px solid #bb851c; outline-offset: 3px; }
+    .feedback { font-size: clamp(24px, 6vw, 30px); font-weight: 700; line-height: 1.7; overflow-wrap: anywhere; }
+    .correct { color: #24613d; } .wrong { color: #855123; }
+    .help { font-size: 15px; line-height: 1.8; color: var(--muted); margin: 22px 0 0; overflow-wrap: anywhere; }
+    .explanation { font-size: 18px; line-height: 1.85; overflow-wrap: anywhere; }
+    .order { font-size: 21px; line-height: 1.85; min-height: 58px; margin: 0 0 18px; padding: 14px 16px;
+      background: #edf3e8; border: 1px dashed #bdd1bd; border-radius: 18px; overflow-wrap: anywhere; }
+    .hint { font-size: 20px; line-height: 1.85; background: #fff6da; border: 1px solid #e8e0bc;
+      border-radius: 18px; padding: 18px; margin: 20px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
     ruby rt { font-size: .48em; color: inherit; opacity: .8; font-weight: 400; }
     .reading-help { cursor: pointer; text-decoration: underline dotted; text-underline-offset: .2em; }
-    .reading-help:focus-visible { outline: 3px solid #da9212; outline-offset: 2px; }
+    .reading-help:focus-visible { outline: 3px solid #bb851c; outline-offset: 2px; }
     .reading-help-reading { font-size: .72em; font-weight: 400; }
+    @media (max-width: 360px) {
+      .card { padding: 18px 14px; border-radius: 20px; }
+      .story, .hint { padding: 16px 14px; }
+      button { padding: 14px 12px; }
+    }
+    @media (prefers-reduced-motion: reduce) { button { transition: none; } }
   </style>
 </head>
 <body><div id="root"></div>
