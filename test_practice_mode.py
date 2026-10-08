@@ -24,9 +24,14 @@ class ModeTests(unittest.TestCase):
                    "display_profiles": {"user_001": {}}, "display_grade_user_001": 6,
                    "answer_keyboard": {}, "jp_keyboard": {}, "jp_chains": {}, "user_id": "user_001"}
         switch_mode(session, True)
-        self.assertEqual(session, {"access_granted": True, "parent_test_mode": True, "screen": "user"})
+        self.assertEqual(session, {"access_granted": True, "parent_test_mode": True, "screen": "user",
+                                   "math_visuals_widget_epoch": 1})
+        session.update(math_visuals_preference=True, math_visuals_enable_1=True)
         switch_mode(session, False)
         self.assertFalse(session["parent_test_mode"])
+        self.assertEqual(session["math_visuals_widget_epoch"], 2)
+        self.assertNotIn("math_visuals_preference", session)
+        self.assertNotIn("math_visuals_enable_1", session)
 
 
 class TestModeAppTests(unittest.TestCase):

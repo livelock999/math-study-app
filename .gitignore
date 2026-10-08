@@ -1,7 +1,9 @@
 .venv/
 .qa/
+.test-tmp/
 .uv-cache/
 __pycache__/
 data/
 *.log
 .streamlit/secrets.toml
+INTEGRATION_STATUS.md

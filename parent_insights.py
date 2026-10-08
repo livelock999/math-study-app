@@ -6,7 +6,7 @@ import csv
 import io
 import json
 
-from daily_review import JST, REVIEW_TYPES, _math_key, _now, _time, _weak_keys, daily_budget, eligible_records, schedule
+from daily_review import JST, REVIEW_TYPES, _math_key, _now, _time, _weak_keys, daily_budget, eligible_records, schedule, math_name
 from hint_metrics import summarize_hints
 from japanese_questions import CATEGORIES, ERROR_LABELS
 
@@ -143,10 +143,26 @@ def error_analysis(math_records, jp_records, user_id, now=None):
     jp_answered = [row for row in jp_initial if row.get("dont_know_used") not in (True, 1)]
     calculations = [row for row in math_answered if row.get("problem_format") == "calculation"]
     words = [row for row in math_answered if row.get("problem_format") == "word_problem"]
+    fills = [row for row in math_answered if row.get("problem_format") == "fill_blank"]
     components = [_component(calculations, "is_correct", "計算問題の答え"),
                   _component(words, "operation_selection_correct", "文章題のたす・ひくの選択"),
                   _component(words, "equation_correct", "文章題の式に入れた数と順序"),
                   _component(words, "calculation_correct", "自分が作った式の計算")]
+    for position, label in (("left_operand", "穴埋めの左の□"), ("right_operand", "穴埋めの右の□")):
+        component = _component([r for r in fills if r.get("blank_position") == position], "is_correct", label)
+        components.append({**component, "field": f"fill_{position}"})
+    threes = [row for row in math_answered if row.get("problem_format") == "three_numbers"]
+    for first in ("addition", "subtraction"):
+        for second in ("addition", "subtraction"):
+            group = [r for r in threes if r.get("operation") == first and r.get("second_operation") == second]
+            label = ("3つの数のたし算" if first == second == "addition" else "3つの数のひき算"
+                     if first == second == "subtraction" else "たし算からひき算" if first == "addition" else "ひき算からたし算")
+            components.append({**_component(group, "is_correct", label), "field": f"three_{first}_{second}"})
+    three_words = [row for row in math_answered if row.get("problem_format") == "three_word_problem"]
+    for name, field, label in (("operation", "operation_selection_correct", "3つの数の文章題の2つの演算選択"),
+                               ("equation", "equation_correct", "3つの数の文章題の3数量と順序"),
+                               ("calculation", "calculation_correct", "3つの数の文章題で作った全式の計算")):
+        components.append({**_component(three_words, field, label), "field": f"three_word_{name}"})
     categories = []
     for category, label in CATEGORIES.items():
         rows = [row for row in jp_answered if row.get("category") == category]
@@ -198,12 +214,15 @@ def csv_export(math_records, jp_records, user_id, now=None):
 
 
 def _math_pool(limit):
-    from learning import problem_pool
+    from learning import problem_pool, get_problem_pool
     from words import word_pool
     pool = []
     for operation in ("addition", "subtraction"):
         pool.extend(problem_pool(operation, limit))
         pool.extend(word_pool(operation, limit))
+        pool.extend(get_problem_pool("fill_blank")(operation, limit))
+        pool.extend(get_problem_pool("three_numbers")(operation, limit))
+        pool.extend(get_problem_pool("three_word_problem")(operation, limit))
     return pool
 
 
@@ -258,11 +277,12 @@ def _adaptive(pool, rows, subject, count):
         if subject == "math":
             key = _math_key(question)
             similar = [row for row in targets if _math_key(row) == key]
-            name = "たし算" if question["operation"] == "addition" else "ひき算"
+            name = math_name(question)
             if similar:
                 # 文章題は同じ意味関係を優先し、数の近い類題を選ぶ。
                 distance = min((int(row.get("story_type") != question.get("story_type")),
-                                abs(row["left_operand"] - question["left_operand"]) + abs(row["right_operand"] - question["right_operand"]))
+                                abs(row["left_operand"] - question["left_operand"]) + abs(row["right_operand"] - question["right_operand"])
+                                + abs((row.get("third_operand") or 0) - (question.get("third_operand") or 0)))
                                for row in similar)
                 rank, reason = 0, f"前に難しかった{name}と同じ考え方の類題"
             elif key in weak:
@@ -310,6 +330,15 @@ def adaptive_japanese(records, user_id, particle_level=None, count=5, now=None):
 
 def math_hint_steps(problem):
     """答えを直接示さず、手がかり→具体的な操作→解き方の順。"""
+    if problem["problem_format"] == "fill_blank":
+        from fill_blank import hint_steps
+        return hint_steps(problem)
+    if problem["problem_format"] == "three_numbers":
+        from three_numbers import hint_steps
+        return hint_steps(problem)
+    if problem["problem_format"] == "three_word_problem":
+        from three_word import hint_steps
+        return hint_steps(problem)
     from words import guidance
     first = guidance(problem)
     if problem["problem_format"] == "word_problem":

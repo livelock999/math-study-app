@@ -14,6 +14,7 @@ from learning import (USERS, generate_problems, init_db, make_attempt, new_id,
 from assessment import assess, recommended_problems
 from activity import JST, month_summary
 from words import guidance
+from math_visuals import visual_model
 from furigana import READINGS
 from text_display import component_display, plain_label
 from practice_mode import is_test_mode, is_test_round, switch_mode, write_learning_answer
@@ -22,6 +23,8 @@ from parent_insights import adaptive_math, math_hint_steps, review_forecast
 from ui_theme import apply_theme, brand, card_heading
 import adaptive_difficulty as difficulty
 import school_scope as school
+
+WORD_FORMATS = ("word_problem", "three_word_problem")
 
 st.set_page_config(page_title="さんすう・こくご れんしゅう", page_icon="📚", layout="centered")
 keyboard = components.declare_component("math_keyboard", path=str(Path(__file__).parent / "keyboard"))
@@ -34,12 +37,13 @@ def start_round(problems, selection_type, review_reasons=None, difficulty_plan=N
     st.session_state.round = {
         "session_id": new_id("session"), "problems": problems,
         "selection_type": selection_type, "index": 0, "answers": [],
-        "phase": "choose" if problems[0]["problem_format"] == "word_problem" else "question",
-        "pending_record": None, "selected_operations": {}, "user_equations": {}, "equation_revision": {},
+        "phase": "choose" if problems[0]["problem_format"] in WORD_FORMATS else "question",
+        "pending_record": None, "selected_operations": {}, "selected_second_operations": {}, "user_equations": {}, "equation_revision": {},
         "user_id": st.session_state.user_id, "suspended": False, "drafts": {}, "interaction_revision": {},
         "test_mode": is_test_mode(st.session_state),
         "review_reasons": dict(review_reasons or {}),
         "difficulty_plan": difficulty_plan,
+        "visual_enabled": bool(st.session_state.get("math_visuals_preference", False)),
     }
     st.session_state.screen = "practice"
 
@@ -135,9 +139,14 @@ def settings_screen():
             st.session_state.screen = "practice"
             st.rerun()
         st.caption("スタートを押すとあたらしく始めます。これまで保存した回答は残ります。")
+    with st.container(key="flashcard_entry"):
+        card_heading("🃏", "けいさんカード", "こたえて、つぎへ。テンポよく れんしゅうしよう。")
+        if st.button("けいさんカードを はじめる", key="flashcard_open", use_container_width=True):
+            st.session_state.screen = "flashcard_settings"
+            st.rerun()
     review_card = st.container(key="review_card_math")
     with st.container(key="practice_card_math"):
-        card_heading("✏️", "さんすうの れんしゅう", "じぶんの ペースで、ひとつずつ。")
+        card_heading("✏️", "いつもの れんしゅう", "じぶんの ペースで、ひとつずつ。")
         with st.expander("もんだいを えらぶ・せってい"):
             modes = {"addition": "たしざん", "subtraction": "ひきざん", "mix": "ミックス"}
             mode = st.radio("もんだい", list(modes), format_func=modes.get, horizontal=True)
@@ -148,9 +157,19 @@ def settings_screen():
             choices = {"auto": "おまかせ", "none": "なし", "with": "あり"}
             special = st.radio("くりあがり・くりさがり", list(choices), format_func=choices.get,
                                horizontal=True, key="special_mode")
-            formats = {"calculation": "けいさん", "word_problem": "ぶんしょうだい"}
+            formats = {"calculation": "けいさん", "three_numbers": "3つの かず", "fill_blank": "□の かず",
+                       "word_problem": "ぶんしょうだい", "three_word_problem": "3つの かずの ぶんしょうだい"}
             problem_format = st.radio("もんだいの かたち", list(formats), format_func=formats.get,
                                       horizontal=True, key="problem_format")
+            if problem_format == "three_numbers":
+                st.caption("ひだりの 2つの かずを けいさんしてから、3つめの かずを けいさんしよう。ミックスは、たす・ひくの 4しゅるいです。")
+            elif problem_format == "three_word_problem":
+                st.caption("2かいの できごとを よんで、たす・ひくを えらび、3つの かずで しきを つくろう。")
+            visual_key = f"math_visuals_enable_{st.session_state.get('math_visuals_widget_epoch', 0)}"
+            if visual_key not in st.session_state:
+                st.session_state[visual_key] = bool(st.session_state.get("math_visuals_preference", False))
+            st.session_state.math_visuals_preference = st.checkbox("図で かんがえる", key=visual_key)
+            st.caption("けいさん・3つの かず・□の かずを、まるで たしかめられるよ。図を使った回答はヒントありとして記録します。")
             error = selection_error(mode, limit, count, special, problem_format)
             if error:
                 st.info(error)
@@ -237,12 +256,13 @@ def remember_practice_draft(state, index, event):
     incoming = event.get("draft", {})
     if not isinstance(incoming, dict):
         return False
-    for name, max_length in (("answer", 3), ("equation_left", 2), ("equation_right", 2)):
-        value = incoming.get(name, draft[name])
+    for name, max_length in (("answer", 3), ("equation_left", 2), ("equation_right", 2), ("equation_third", 2)):
+        value = incoming.get(name, draft.get(name, ""))
         if not isinstance(value, str) or len(value) > max_length or (value and not (value.isascii() and value.isdigit())):
             return False
     choice = incoming.get("selected_operation", draft["selected_operation"])
-    if choice not in (None, "addition", "subtraction"):
+    second_choice = incoming.get("selected_second_operation", draft.get("selected_second_operation"))
+    if choice not in (None, "addition", "subtraction") or second_choice not in (None, "addition", "subtraction"):
         return False
     seconds = event.get("response_time_sec", draft["elapsed_sec"])
     reading_help = incoming.get("reading_help_used", event.get("reading_help_used", draft.get("reading_help_used", False)))
@@ -250,9 +270,10 @@ def remember_practice_draft(state, index, event):
         return False
     if type(seconds) not in (int, float) or not 0 <= seconds < float("inf"):
         return False
-    for name in ("answer", "equation_left", "equation_right"):
-        draft[name] = incoming.get(name, draft[name])
+    for name in ("answer", "equation_left", "equation_right", "equation_third"):
+        draft[name] = incoming.get(name, draft.get(name, ""))
     draft["selected_operation"] = choice
+    draft["selected_second_operation"] = second_choice
     draft["elapsed_sec"] = max(draft["elapsed_sec"], seconds)
     draft["reading_help_used"] = draft.get("reading_help_used", False) or reading_help
     return True
@@ -268,15 +289,23 @@ def practice_screen():
     index = state["index"]
     problems = state["problems"]
     problem = problems[index]
-    is_word = problem["problem_format"] == "word_problem"
+    is_word = problem["problem_format"] in WORD_FORMATS
+    is_three_word = problem["problem_format"] == "three_word_problem"
     selected_operation = state.setdefault("selected_operations", {}).get(index)
+    selected_second_operation = state.setdefault("selected_second_operations", {}).get(index)
     equation = state.setdefault("user_equations", {}).get(index)
     revision = state.setdefault("equation_revision", {}).get(index, 0)
     draft = state.setdefault("drafts", {}).setdefault(index, {
-        "answer": "", "equation_left": "", "equation_right": "", "selected_operation": None,
+        "answer": "", "equation_left": "", "equation_right": "", "equation_third": "",
+        "selected_operation": None, "selected_second_operation": None,
         "elapsed_sec": 0, "hint_used": False, "hint_level": 0, "hint_visible": False, "explanation_visible": False,
     })
     draft.setdefault("hint_level", 1 if draft.get("hint_used") else 0)
+    draft.setdefault("equation_third", "")
+    draft.setdefault("selected_second_operation", None)
+    can_show_visual = problem["problem_format"] in ("calculation", "fill_blank", "three_numbers")
+    draft.setdefault("visual_visible", bool(state.get("visual_enabled") and can_show_visual))
+    draft.setdefault("visual_help_used", draft["visual_visible"] and state["phase"] != "feedback")
     interaction_revision = state.setdefault("interaction_revision", {}).get(index, 0)
     st.caption(f"{USERS[st.session_state.user_id]} ／ "
                f"{ {'retry': 'もういちど れんしゅう', 'review': 'きょうの ふくしゅう', 'review_retry': 'ふくしゅうを もういちど'}.get(state['selection_type'], 'れんしゅう')}")
@@ -305,6 +334,12 @@ def practice_screen():
     if interaction_revision:
         token += f":ui{interaction_revision}"
     last_answer = state["answers"][-1] if state["phase"] == "feedback" else None
+    displayed_equation = None
+    if is_word and equation and state["phase"] != "equation":
+        displayed_equation = f"{equation['left']} {'+' if equation['operation'] == 'addition' else '−'} {equation['right']}"
+        if is_three_word:
+            displayed_equation += f" {'+' if equation['second_operation'] == 'addition' else '−'} {equation['third']}"
+        displayed_equation += " = ?"
     event = keyboard(
         furigana=READINGS,
         **component_display("math", problem, st.session_state.user_id),
@@ -314,11 +349,16 @@ def practice_screen():
         dont_know_used=bool(last_answer and last_answer.get("dont_know_used")),
         last=index + 1 == len(problems), key="answer_keyboard", default=None,
         word_problem=is_word, question_id=f"{state['session_id']}:{index}",
-        equation=(f"{equation['left']} {'+' if equation['operation'] == 'addition' else '−'} {equation['right']} = ?"
-                  if is_word and equation and state["phase"] != "equation" else None),
+        three_word_problem=is_three_word,
+        answer_label="□に はいる かず" if problem["problem_format"] == "fill_blank" else "こたえ",
+        visual_available=can_show_visual, visual_visible=draft["visual_visible"],
+        visual_model=visual_model(problem, reveal=state["phase"] == "feedback") if draft["visual_visible"] else None,
+        equation=displayed_equation,
         selected_operation=selected_operation,
+        selected_second_operation=selected_second_operation,
         equation_left=equation["left"] if equation else None,
         equation_right=equation["right"] if equation else None,
+        equation_third=equation.get("third") if equation else None,
         draft=draft, elapsed_sec=draft["elapsed_sec"], hint_used=draft["hint_used"],
         hint_visible=draft["hint_visible"], explanation_visible=draft["explanation_visible"],
         hint_text=math_hint_steps(problem)[max(0, draft["hint_level"] - 1)],
@@ -331,13 +371,17 @@ def practice_screen():
     if not remember_practice_draft(state, index, event):
         return
     action = event.get("action")
-    if action in ("pause", "open_history", "show_hint", "show_explanation"):
+    if action in ("pause", "open_history", "show_hint", "show_explanation", "show_visual"):
         if action == "show_hint" and state["phase"] != "feedback":
             draft["hint_used"] = True
             draft["hint_visible"] = True
             draft["hint_level"] = min(3, draft["hint_level"] + 1)
         elif action == "show_explanation" and state["phase"] == "feedback":
             draft["explanation_visible"] = True
+        elif action == "show_visual" and can_show_visual:
+            draft["visual_visible"] = True
+            if state["phase"] != "feedback":
+                draft["visual_help_used"] = True
         elif action == "pause":
             state["suspended"] = True
             st.session_state.screen = "settings"
@@ -353,17 +397,29 @@ def practice_screen():
         choice = event.get("selected_operation")
         if is_word and choice in ("addition", "subtraction"):
             state["selected_operations"][index] = choice
+            state["phase"] = "choose_second" if is_three_word else "equation"
+            st.rerun()
+    elif state["phase"] == "choose_second" and action == "choose_operation":
+        choice = event.get("selected_operation")
+        if is_three_word and choice in ("addition", "subtraction"):
+            state["selected_second_operations"][index] = choice
             state["phase"] = "equation"
             st.rerun()
     elif state["phase"] == "equation" and event.get("action") == "submit_equation":
         left, right = event.get("equation_left"), event.get("equation_right")
         choice = event.get("selected_operation")
+        second_choice, third = event.get("selected_second_operation"), event.get("equation_third")
         if (not is_word or choice not in ("addition", "subtraction")
-                or type(left) is not int or type(right) is not int or not 0 <= left <= 99 or not 0 <= right <= 99):
-            st.error("しきの 2つの すうじを いれてね")
+                or type(left) is not int or type(right) is not int or not 0 <= left <= 99 or not 0 <= right <= 99
+                or (is_three_word and (second_choice not in ("addition", "subtraction")
+                                       or type(third) is not int or not 0 <= third <= 99))):
+            st.error("しきの 3つの すうじを いれてね" if is_three_word else "しきの 2つの すうじを いれてね")
             return
         state["selected_operations"][index] = choice
         state["user_equations"][index] = {"left": left, "right": right, "operation": choice}
+        if is_three_word:
+            state["selected_second_operations"][index] = second_choice
+            state["user_equations"][index].update(third=third, second_operation=second_choice)
         state["phase"] = "question"
         st.rerun()
     elif state["phase"] == "question" and is_word and event.get("action") == "edit_equation":
@@ -373,7 +429,8 @@ def practice_screen():
     elif ((state["phase"] == "question" and action == "answer")
           or (state["phase"] != "feedback" and action == "dont_know")):
         dont_know = action == "dont_know"
-        if not dont_know and is_word and selected_operation not in ("addition", "subtraction"):
+        if not dont_know and is_word and (selected_operation not in ("addition", "subtraction")
+                or (is_three_word and selected_second_operation not in ("addition", "subtraction"))):
             return
         answer = None if dont_know else event.get("answer")
         seconds = event.get("response_time_sec")
@@ -390,9 +447,12 @@ def practice_screen():
             selected_operation=selected_operation,
             equation_left=equation["left"] if is_word and equation else None,
             equation_right=equation["right"] if is_word and equation else None,
+            selected_second_operation=selected_second_operation if is_three_word else None,
+            equation_third=equation["third"] if is_three_word and equation else None,
             hint_used=draft["hint_used"],
             hint_level=draft["hint_level"], dont_know_used=dont_know,
             reading_help_used=draft.get("reading_help_used", False),
+            visual_help_used=draft.get("visual_help_used", False),
         )
         save_pending_answer(state)
         st.rerun()
@@ -401,7 +461,7 @@ def practice_screen():
             st.session_state.screen = "results"
         else:
             state["index"] += 1
-            state["phase"] = "choose" if problems[index + 1]["problem_format"] == "word_problem" else "question"
+            state["phase"] = "choose" if problems[index + 1]["problem_format"] in WORD_FORMATS else "question"
         st.rerun()
 
 
@@ -456,6 +516,10 @@ def history_screen():
         st.rerun()
     if st.button(plain_label("学習レポート", st.session_state.user_id), key="report_history", use_container_width=True):
         open_report("history")
+    if st.button("計算カードのレポート", key="fc_report_history", use_container_width=True):
+        st.session_state.fc_return = "history"
+        st.session_state.screen = "flashcard_report"
+        st.rerun()
     if st.button(plain_label("学習カレンダー・ごほうび", st.session_state.user_id), key="calendar_history", use_container_width=True):
         open_calendar("history")
     page = st.session_state.history_page
@@ -466,6 +530,7 @@ def history_screen():
             answered_at = datetime.fromisoformat(record["datetime"]).astimezone(timezone(timedelta(hours=9)))
             table.append({
                 "日時（日本時間）": answered_at.strftime("%Y/%m/%d %H:%M:%S"),
+                "学習モード": "計算カード" if record.get("learning_mode") == "flashcard" else "いつもの練習",
                 "問題": record["question_text"], "自分の回答": "わからない" if record.get("dont_know_used") else record["user_answer"],
                 "読み方の確認": "記録なし" if record.get("reading_help_used") is None else "あり" if record["reading_help_used"] else "なし",
                 "正しい答え": record["correct_answer"], "正誤": "○" if record["is_correct"] else "×",
@@ -473,10 +538,14 @@ def history_screen():
                          "review": "きょうの復習", "review_retry": "復習の再練習"}.get(record["selection_type"], record["selection_type"]),
                 "出題順": record["question_order"], "回答回数": record["attempt_count"],
                 "回答時間（秒）": record["response_time_sec"],
+                "入力方法": {"voice": "音声", "keyboard": "キーボード", "keypad": "画面テンキー"}.get(record.get("input_method"), "記録なし"),
+                "音声の認識文字": record.get("recognized_text") or "—",
+                "音声認識のやりなおし": record.get("recognition_retry_count"),
                 "ヒント": hint_label(record.get("hint_used")),
                 "ヒント段階": record["hint_level"] if record.get("hint_level") is not None else "記録なし",
+                "図の使用": "記録なし" if record.get("visual_help_used") is None else "あり" if record["visual_help_used"] else "なし",
                 "わからない": "あり" if record.get("dont_know_used") else "なし",
-                "形式": "文章題" if record["problem_format"] == "word_problem" else "計算",
+                "形式": {"word_problem": "文章題", "fill_blank": "穴埋め", "calculation": "計算", "three_numbers": "3つの数", "three_word_problem": "3つの数の文章題"}.get(record["problem_format"], record["problem_format"]),
                 "たす・ひくの選択": correctness(record["operation_selection_correct"]),
                 "自分の式": record.get("user_equation") or "—（記録なし）",
                 "式に使う数・順序": correctness(record["equation_correct"]),
@@ -601,14 +670,19 @@ def report_screen():
     if st.button("もどる", key="report_back"):
         st.session_state.screen = st.session_state.report_return
         st.rerun()
+    if st.button("計算カードのレポート", key="fc_report_normal", use_container_width=True):
+        st.session_state.fc_return = "report"
+        st.session_state.screen = "flashcard_report"
+        st.rerun()
     st.caption("保護者向けの自動集計です。外部AIへの送信・AI利用料はありません。")
     try:
-        all_records = load_math_review_history(st.session_state.user_id)
+        all_records = [r for r in load_math_review_history(st.session_state.user_id)
+                       if r.get("learning_mode") != "flashcard"]
         # 復習が増えても、従来の通常/再練習500回答を押し出さない。
         records = [r for r in all_records if r["selection_type"] not in ("review", "review_retry")][:500]
         records += [r for r in all_records if r["selection_type"] in ("review", "review_retry")][:500]
         has_more = len(records) < len(all_records)
-        report = assess(records)
+        report = assess(records, user_id=st.session_state.user_id)
         dates = [datetime.fromisoformat(row["datetime"]).astimezone(timezone(timedelta(hours=9)))
                  for row in records]
     except (sqlite3.Error, OSError, ValueError, KeyError, TypeError):
@@ -623,7 +697,8 @@ def report_screen():
     else:
         st.info("まだ学習履歴がありません。れんしゅうすると、ここに表示されます。")
     overall = report["overall"]
-    st.write("**計算問題の評価（文章題とは別集計）**")
+    st.write("**計算問題の評価**")
+    st.caption("計算・3つの数・穴埋め・文章題・3つの数の文章題をそれぞれ集計します。図を使った正解はヒントありの正解に含めます。")
     counts, accuracy, speed = st.columns(3)
     counts.metric("初回の回答", f"{overall['count']}問")
     accuracy.metric("初回正答率", f"{overall['rate']:.0%}" if overall["count"] else "—")
@@ -636,7 +711,9 @@ def report_screen():
                     help=f"ヒントを使った初回回答 {overall['assisted_count']}問")
     st.caption(f"ヒント記録あり {overall['hint_known_count']}問、記録なし {overall['hint_unknown_count']}問。"
                "ヒント使用率・自力／ヒントあり正答率は記録のある回答だけで集計します。ヒントは理解を助けるものです。")
-    st.caption("回答時間は正解した初回回答の中央値です。休憩や操作の影響もあるため、速さで苦手を判定しません。")
+    st.caption("回答時間は正解した初回回答の中央値です。計算カードは専用レポートで集計します。休憩や操作の影響もあるため、速さで苦手を判定しません。")
+    st.caption(f"図を使った初回回答：{overall['visual_used_count']}問"
+               f"（記録あり{overall['visual_known_count']}問・記録なし{overall['visual_unknown_count']}問）。文字ヒントの段階は別に記録します。")
     st.caption(f"読み方を押して確認した初回回答：{overall['reading_help_count']}問"
                f"（記録あり{overall['reading_known_count']}問・記録なし{overall['reading_unknown_count']}問）。"
                "ヒント使用や計算の正誤とは別の記録です。ふりがな表示は確認回数に含めません。")
@@ -656,9 +733,57 @@ def report_screen():
                  "初回の正答率とは分けて表示しています。")
     with st.expander("きょうの復習の成果（初回とは別集計）"):
         for label, key in (("計算の復習", "review"), ("計算の復習の再練習", "review_retry"),
+                           ("3つの数の復習", "three_review"), ("3つの数の復習の再練習", "three_review_retry"),
+                           ("3つの数の文章題の復習", "three_word_review"), ("3つの数の文章題の復習の再練習", "three_word_review_retry"),
+                           ("穴埋めの復習", "fill_review"), ("穴埋めの復習の再練習", "fill_review_retry"),
                            ("文章題の復習", "word_review"), ("文章題の復習の再練習", "word_review_retry")):
             data = report.get(key, {})
             st.write(f"{label}：{data.get('correct', 0)} / {data.get('count', 0)}問正解")
+    if report["fill_normal"]["count"] or report["fill_retry"]["count"]:
+        st.write("**□に入る数の練習**")
+        fill_table = [{"練習": label, "回答数": data["count"], "正答率": display_rate(data["rate"]),
+                       **hint_columns(data), "図を使用": data["visual_used_count"]}
+                      for label, data in (("初回", report["fill_normal"]), ("再練習", report["fill_retry"]),
+                                          ("各問題の最新回答", report["fill_latest"]))]
+        st.dataframe(fill_table, hide_index=True, use_container_width=True)
+        if report["fill_groups"]:
+            st.dataframe([{"問題の種類": group["label"], "初回回答数": group["count"],
+                           "初回正答率": display_rate(group["rate"]), "評価": group["status"],
+                           "最新の正答率": display_rate(group["latest"]["rate"]),
+                           **hint_columns(group)} for group in report["fill_groups"]],
+                         hide_index=True, use_container_width=True)
+        st.caption("同じ式でも左の□と右の□は別の問題です。図を見た正解も正解に数え、復習・自力の成果は分けて表示します。")
+    if report["three_normal"]["count"] or report["three_retry"]["count"]:
+        st.write("**3つの数の練習**")
+        three_table = [{"練習": label, "回答数": data["count"], "正答率": display_rate(data["rate"]),
+                        **hint_columns(data), "図を使用": data["visual_used_count"]}
+                       for label, data in (("初回", report["three_normal"]), ("再練習", report["three_retry"]),
+                                           ("各問題の最新回答", report["three_latest"]))]
+        st.dataframe(three_table, hide_index=True, use_container_width=True)
+        if report["three_groups"]:
+            st.dataframe([{"問題の種類": group["label"], "初回回答数": group["count"],
+                           "初回正答率": display_rate(group["rate"]), "評価": group["status"],
+                           "最新の正答率": display_rate(group["latest"]["rate"]),
+                           **hint_columns(group)} for group in report["three_groups"]],
+                         hide_index=True, use_container_width=True)
+        st.caption("左から順に計算します。2つの演算の組み合わせごとに集計し、従来の計算問題の初回評価とは分けて表示します。")
+    if report["three_word_normal"]["count"] or report["three_word_retry"]["count"]:
+        st.write("**3つの数の文章題の練習**")
+        three_word_table = [{"練習": label, "回答数": data["count"], "全体正答率": display_rate(data["rate"]),
+                             "2回のたす・ひく選択": display_rate(data["operation_rate"]),
+                             "3つの数・順序": display_rate(data["equation_rate"]),
+                             "自分の式の計算": display_rate(data["calculation_rate"]),
+                             **hint_columns(data)}
+                            for label, data in (("初回", report["three_word_normal"]), ("再練習", report["three_word_retry"]),
+                                                ("各問題の最新回答", report["three_word_latest"]))]
+        st.dataframe(three_word_table, hide_index=True, use_container_width=True)
+        if report["three_word_groups"]:
+            st.dataframe([{"問題の種類": group["label"], "初回回答数": group["count"],
+                           "初回正答率": display_rate(group["rate"]), "評価": group["status"],
+                           "最新の正答率": display_rate(group["latest"]["rate"]),
+                           **hint_columns(group)} for group in report["three_word_groups"]],
+                         hide_index=True, use_container_width=True)
+        st.caption("2回の出来事をたす・ひくで表し、文章の順に3つの数を式へ入れます。選んだ式の計算は独立して評価し、復習と初回は分けます。")
     if report["word_normal"]["count"] or report["word_retry"]["count"]:
         st.write("**文章題の回答**")
         word_table = []
@@ -689,7 +814,7 @@ def report_screen():
                  "ヒントが支えになっている種類として練習を提案します。正答率の評価はヒント使用の有無で減点しません。"
                  "回答後の解説はヒント使用に含めず、ヒントを開いただけで未回答の問題も回答数に含めません。")
     label = "おすすめの5問を れんしゅう" if report["target"] else "ミックス10問を れんしゅう"
-    st.caption("おすすめの練習は計算問題の回答だけから選びます。文章題は設定画面から選べます。")
+    st.caption("おすすめの練習は計算問題の回答だけから選びます。3つの数・□の数・文章題は設定画面から選べます。")
     if st.button(label, key="report_practice", type="primary", use_container_width=True):
         st.session_state.attempt_counts = {}
         start_round(recommended_problems(report), "normal")
@@ -772,12 +897,15 @@ screens = {"user": user_screen, "settings": settings_screen,
            "report": report_screen, "calendar": calendar_screen, "cross_report": cross_report_screen,
            "display_settings": display_settings_screen, "parent_dashboard": render_dashboard,
            "school_settings": school_settings_screen}
+if st.session_state.screen.startswith("flashcard_"):
+    from flashcards_ui import SCREENS as FLASHCARD_SCREENS
+    screens.update(FLASHCARD_SCREENS)
 if st.session_state.screen.startswith("jp_"):
     from japanese_ui import SCREENS
     screens.update(SCREENS)
 screens[st.session_state.screen]()
 
-if st.session_state.screen in ("settings", "jp_settings", "report", "jp_analysis", "results", "jp_results"):
+if st.session_state.screen in ("settings", "jp_settings", "report", "jp_analysis", "results", "jp_results", "flashcard_results", "flashcard_settings", "flashcard_report"):
     with st.expander("おうちの人へ・レポートと設定"):
         if st.button("週間レポート・学習目標・記録の書き出し（保護者向け）", key="parent_dashboard_open", use_container_width=True):
             st.session_state.parent_dashboard_return = st.session_state.screen

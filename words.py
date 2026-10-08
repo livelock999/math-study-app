@@ -51,6 +51,15 @@ def word_pool(operation, limit, special="auto"):
 
 def guidance(problem, reveal=False):
     """回答前は考える手がかりだけ、回答後は正しい式と答えも返します。"""
+    if problem["problem_format"] == "three_word_problem":
+        from three_word import guidance as three_word_guidance
+        return three_word_guidance(problem, reveal)
+    if problem["problem_format"] == "three_numbers":
+        from three_numbers import guidance as three_guidance
+        return three_guidance(problem, reveal)
+    if problem["problem_format"] == "fill_blank":
+        from fill_blank import guidance as fill_guidance
+        return fill_guidance(problem, reveal)
     hints = {
         "increase": "はじめの かずから、もらった ぶんだけ ふえるよ。",
         "decrease": "はじめに あった ものから、たべた ものを とりのぞいて みよう。",

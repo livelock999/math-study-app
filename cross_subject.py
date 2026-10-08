@@ -24,8 +24,13 @@ def load_records(user_id):
 
 def summarize(rows):
     correct = sum(row["correct"] for row in rows)
+    visual = [row.get("source", row).get("visual_help_used") for row in rows
+              if type(row.get("source", row).get("visual_help_used")) in (bool, int)
+              and row.get("source", row).get("visual_help_used") in (0, 1)]
     return {"count": len(rows), "correct": correct,
             "rate": correct / len(rows) if rows else None,
+            "visual_used_count": sum(bool(value) for value in visual),
+            "visual_known_count": len(visual), "visual_unknown_count": len(rows) - len(visual),
             **summarize_hints([{"correct": row["correct"],
                                 "hint_used": row.get("source", row).get("hint_used"),
                                 "reading_help_used": row.get("source", row).get("reading_help_used")}
@@ -50,6 +55,8 @@ def build_report(math_records, japanese_records, user_id, days=30, now=None):
                 continue
             initial = (record["selection_type"] == "normal" if subject == "math" else
                        record["attempt_count"] == 1 and record["selection_type"] not in ("retry", "review", "review_retry"))
+            if subject == "math" and record.get("learning_mode") == "flashcard":
+                initial = initial and record.get("attempt_count") == 1
             selected[subject].append({"at": at, "initial": initial,
                                       "correct": bool(record["is_correct"] if subject == "math" else record["correct"]),
                                       "source": record})
@@ -68,7 +75,8 @@ def build_report(math_records, japanese_records, user_id, days=30, now=None):
 
     math_initial = [r for r in selected["math"] if r["initial"]]
     jp_initial = [r for r in selected["japanese"] if r["initial"]]
-    calculations = [r for r in math_initial if r["source"]["problem_format"] == "calculation"]
+    calculations = [r for r in math_initial if r["source"]["problem_format"] == "calculation"
+                    and r["source"].get("learning_mode") != "flashcard"]
     words = [r for r in math_initial if r["source"]["problem_format"] == "word_problem"]
     reading = [r for r in jp_initial if r["source"]["category"] in ("sentence", "information", "passage")
                and r["source"]["reading_mode"] == "self_read"]
@@ -86,6 +94,27 @@ def build_report(math_records, japanese_records, user_id, days=30, now=None):
     particles = [r for r in jp_initial if r["source"]["category"] == "particles"
                  and r["source"]["reading_mode"] == "self_read"]
     groups.append({"label": "国語：てにをは（助詞）", **summarize(particles)})
+    fills = [r for r in math_initial if r["source"]["problem_format"] == "fill_blank"]
+    fill_group = {"label": "算数：□に入る数", **summarize(fills)}
+    if fills:
+        groups.append(fill_group)
+    threes = [r for r in math_initial if r["source"]["problem_format"] == "three_numbers"]
+    three_group = {"label": "算数：3つの数", **summarize(threes)}
+    if threes:
+        groups.append(three_group)
+    three_words = [r for r in math_initial if r["source"]["problem_format"] == "three_word_problem"]
+    three_word_groups = []
+    if three_words:
+        three_word_groups.append({"label": "算数：3つの数の文章題の全体正解", **summarize(three_words)})
+        for label, field in (("2回のたす・ひく選択", "operation_selection_correct"),
+                             ("3つの数・順序", "equation_correct"), ("自分の式の計算", "calculation_correct")):
+            evaluated = [{"correct": bool(r["source"][field]), "source": r["source"]}
+                         for r in three_words if r["source"].get(field) is not None]
+            three_word_groups.append({"label": "算数：3つの数の文章題の" + label, **summarize(evaluated)})
+        groups.extend(three_word_groups)
+    cards = [r for r in math_initial if r["source"].get("learning_mode") == "flashcard"]
+    if cards:
+        groups.append({"label": "算数：計算カード", **summarize(cards)})
     suggestions = []
     for group in groups:
         group["status"] = ("判断保留（5問未満）" if group["count"] < 5 else
@@ -100,6 +129,12 @@ def build_report(math_records, japanese_records, user_id, days=30, now=None):
         suggestions.append("国語の1文読解・だれ／なに／どこ・短文読解から5問練習しましょう。")
     if groups[6]["count"] >= 5 and groups[6]["rate"] < .8:
         suggestions.append("てにをはで、行き先の「に」と動作する場所の「で」などを比べて練習しましょう。")
+    if fill_group["count"] >= 5 and fill_group["rate"] < .8:
+        suggestions.append("算数の□に入る数を5問練習し、はじめの数・たす数・とる数の関係を図でも確認しましょう。")
+    if three_group["count"] >= 5 and three_group["rate"] < .8:
+        suggestions.append("算数の3つの数を5問練習し、左の2つの数から順に計算する手順を確認しましょう。")
+    if any(g["count"] >= 5 and g["rate"] < .8 for g in three_word_groups):
+        suggestions.append("3つの数の文章題を5問練習し、2回の出来事と、式に使う3つの数の順序を確認しましょう。")
     for subject, title in (("math", "算数"), ("japanese", "国語")):
         initial = subjects[subject]["initial"]
         if (initial["count"] >= 5 and initial["hint_known_count"] >= 5

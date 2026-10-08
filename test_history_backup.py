@@ -21,6 +21,8 @@ def math_record(user="user_001", **updates):
     row = learning.make_attempt(learning.make_problem("addition", 10, 2, 3), user, "session", 1,
                                 "normal", 5, 2.5, 1, round_size=5)
     row.update(updates)
+    if 'is_correct' in updates and 'first_attempt_correct' not in updates:
+        row['first_attempt_correct'] = updates['is_correct']
     return row
 
 

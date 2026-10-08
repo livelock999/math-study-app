@@ -26,9 +26,16 @@ BOOLEAN_COLUMNS = frozenset((
     "carry", "borrowing", "crosses_10", "zero_included", "doubles",
     "operation_selection_correct", "equation_correct", "calculation_correct",
     "is_correct", "hint_used", "dont_know_used", "retry_flag", "answer_is_10",
-    "operand_contains_10", "near_10", "round_completed", "reading_help_used",
+    "operand_contains_10", "near_10", "round_completed", "reading_help_used", "visual_help_used",
+    "recognition_success", "first_attempt_correct",
 ))
 COUNT_KEYS = ("math_added", "japanese_added", "math_existing", "japanese_existing")
+THREE_WORD_OPERATIONS = {
+    "increase_twice": ("addition", "addition"),
+    "decrease_twice": ("subtraction", "subtraction"),
+    "increase_then_decrease": ("addition", "subtraction"),
+    "decrease_then_increase": ("subtraction", "addition"),
+}
 
 
 def _timestamp(value):
@@ -108,19 +115,90 @@ def _math_record(record, user_id):
     if normalized["hint_level"] is not None and not 0 <= normalized["hint_level"] <= 3:
         raise ValueError("算数のヒント段階が不正です。")
     if (normalized["selection_type"] not in ("normal", "weak_area", "retry", "review", "review_retry")
-            or normalized["problem_format"] not in ("calculation", "word_problem")
+            or normalized["problem_format"] not in ("calculation", "word_problem", "fill_blank", "three_numbers", "three_word_problem")
             or normalized["operation"] not in ("addition", "subtraction")
             or normalized["number_range"] not in (10, 20)):
         raise ValueError("算数の問題設定が不正です。")
     left, right, limit = normalized["left_operand"], normalized["right_operand"], normalized["number_range"]
-    expected = left + right if normalized["operation"] == "addition" else left - right
-    if not (0 <= left <= limit and 0 <= right <= limit and 0 <= expected <= limit and normalized["correct_answer"] == expected):
+    base_result = left + right if normalized["operation"] == "addition" else left - right
+    if not (0 <= left <= limit and 0 <= right <= limit and 0 <= base_result <= limit):
         raise ValueError("算数の数量または正しい答えが不正です。")
-    if normalized["user_answer"] is not None and not 0 <= normalized["user_answer"] <= 99:
-        raise ValueError("算数の回答は0〜99の整数です。")
+    expected = base_result
+    if normalized["problem_format"] in ("three_numbers", "three_word_problem"):
+        third, second_operation = normalized.get("third_operand"), normalized.get("second_operation")
+        if type(third) is not int or not 0 <= third <= limit or second_operation not in ("addition", "subtraction"):
+            raise ValueError("3つの数の問題の数量または2つめの演算が不正です。")
+        expected = base_result + third if second_operation == "addition" else base_result - third
+        expected_id = f"three_numbers_v1_{normalized['operation']}_{second_operation}_{limit}_{left}_{right}_{third}"
+        if normalized["problem_format"] == "three_word_problem":
+            story = normalized["story_type"]
+            if (THREE_WORD_OPERATIONS.get(story) != (normalized["operation"], second_operation)
+                    or min(left, right, third) < 1 or normalized["unknown_type"] != "result"):
+                raise ValueError("3つの数の文章題の数量・お話の種類・演算が不正です。")
+            expected_id = f"three_word_v1_{story}_{limit}_{left}_{right}_{third}"
+        if not 0 <= expected <= limit or normalized["problem_id"] != expected_id:
+            raise ValueError("3つの数の問題の答えまたは問題IDが不正です。")
+    elif normalized.get("third_operand") is not None or normalized.get("second_operation") is not None:
+        raise ValueError("2つの数の問題には3つめの数・演算を設定できません。")
+    if normalized["problem_format"] == "fill_blank":
+        position = normalized["blank_position"]
+        if position not in ("left_operand", "right_operand"):
+            raise ValueError("穴埋め問題の空欄の位置が不正です。")
+        expected_id = f"fill_blank_v1_{normalized['operation']}_{limit}_{position}_{left}_{right}"
+        if normalized["problem_id"] != expected_id:
+            raise ValueError("穴埋め問題の問題IDと数量が一致しません。")
+        # Store the operands of the complete equation unchanged. The child's
+        # answer is the hidden operand, rather than the equation's result.
+        expected = normalized[position]
+    if normalized["correct_answer"] != expected:
+        raise ValueError("算数の数量または正しい答えが不正です。")
+    if normalized["user_answer"] is not None and not 0 <= normalized["user_answer"] <= 999:
+        raise ValueError("算数の回答は0〜999の整数です。")
     if normalized["round_size"] is not None and (normalized["round_size"] < normalized["question_order"] or normalized["round_size"] < 1):
         raise ValueError("算数のセット問題数が不正です。")
+    if normalized.get("visual_help_used") is True and normalized["hint_used"] is not True:
+        raise ValueError("図を使った回答にはヒント使用を記録してください。")
+    _flashcard_metadata(normalized)
     return normalized
+
+
+def _flashcard_metadata(row):
+    """Nullable additions keep old backups lossless; never infer old voice data."""
+    mode, method = row.get("learning_mode"), row.get("input_method")
+    if mode is not None and mode not in ("normal", "flashcard", "retry", "weak_practice"):
+        raise ValueError("算数の学習モードが不正です。")
+    if method is not None and method not in ("voice", "keyboard", "keypad"):
+        raise ValueError("算数の入力方法が不正です。")
+    lower, upper = row.get("answer_range_min"), row.get("answer_range_max")
+    if (lower is None) != (upper is None) or (lower is not None and
+            not 0 <= lower <= row["correct_answer"] <= upper <= 20):
+        raise ValueError("計算カードの答えの範囲が不正です。")
+    retries, total = row.get("recognition_retry_count"), row.get("total_recognition_retry_count")
+    if (retries is not None and retries < 0) or (total is not None and total < 0):
+        raise ValueError("音声の再認識回数が不正です。")
+    if total is not None and retries is not None and total < retries:
+        raise ValueError("音声の再認識回数の合計が不正です。")
+    elapsed = row.get("session_elapsed_sec")
+    if elapsed is not None and elapsed < row["response_time_sec"]:
+        raise ValueError("セット全体の時間が回答時間より短くなっています。")
+    first = row.get("first_attempt_correct")
+    if row["attempt_count"] == 1 and first is not None and first != row["is_correct"]:
+        raise ValueError("初回の正誤が回答結果と一致しません。")
+    # Failed voice recognitions may precede a keyboard/keypad answer. Keep
+    # their count even though no voice text or parsed voice answer was accepted.
+    voice_fields = ("recognized_text", "parsed_answer", "recognition_success")
+    if method == "voice":
+        if (not row.get("recognized_text") or row.get("recognition_success") is not True
+                or row.get("parsed_answer") is None
+                or not 0 <= row["parsed_answer"] <= 99
+                or row.get("parsed_answer") != row["user_answer"] or retries is None):
+            raise ValueError("音声回答の認識結果が不正です。")
+    elif any(row.get(name) is not None for name in voice_fields):
+        raise ValueError("音声以外の回答には音声認識結果を設定できません。")
+    if mode == "flashcard" and (row["problem_format"] != "calculation" or method is None):
+        raise ValueError("計算カードの問題形式または入力方法が不正です。")
+    if mode == "flashcard" and row["user_answer"] is not None and not 0 <= row["user_answer"] <= 99:
+        raise ValueError("計算カードの回答は0〜99の整数です。")
 
 
 def _japanese_record(record, user_id):
