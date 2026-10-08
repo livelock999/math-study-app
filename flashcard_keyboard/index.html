@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+*{box-sizing:border-box}body{margin:0;font-family:system-ui,sans-serif;color:#183647;text-align:center}
+.card{padding:20px 12px;background:#f0f8fc;border:2px solid #c4e1ed;border-radius:24px}
+.question{font-size:clamp(42px,10vw,78px);font-weight:750;margin:12px 0}
+input{width:130px;padding:8px;font-size:38px;text-align:center;border:2px solid #648ca0;border-radius:12px}
+button{border:0;border-radius:12px;background:#126e87;color:white;padding:11px;font-size:20px;cursor:pointer;margin:5px;min-height:48px}
+button:disabled{opacity:.5;cursor:wait}.keys{display:grid;grid-template-columns:repeat(3,1fr);max-width:280px;margin:14px auto}
+.keys button{font-size:24px;margin:4px;padding:10px 6px}.keys button:last-child{font-size:17px}.note{font-size:13px;line-height:1.6}.status{font-size:28px;font-weight:700}
+:focus-visible{outline:4px solid #e7a523;outline-offset:3px}.error{color:#a22b26;min-height:24px}
+</style></head><body><div id="root"></div><script>
+const root=document.getElementById('root');
+let currentToken=null,shownAt=0,pending=false,currentArgs={},recognition=null,advanceTimer=null,focusTimers=[];
+let inputMethod='keyboard',userInteracted=false;
+let voiceEnabled=false,voiceTimer=null;
+function abortVoice(){const active=recognition;recognition=null;if(active)active.abort()}
+function send(type,extra={}){window.parent.postMessage({isStreamlitMessage:true,type,...extra},'*')}
+function resize(){send('streamlit:setFrameHeight',{height:document.body.scrollHeight+12})}
+function emit(action,extra={}){
+  if(pending)return;pending=true;
+  root.querySelectorAll('button').forEach(button=>button.disabled=true);
+  send('streamlit:setComponentValue',{value:{token:currentToken,action,voice_enabled:voiceEnabled,response_time_sec:(performance.now()-shownAt)/1000,...extra}});
+  abortVoice();
+}
+function button(text,action){const node=document.createElement('button');node.type='button';node.textContent=text;node.onclick=action;return node}
+function paragraph(text,className='note'){const node=document.createElement('p');node.className=className;node.textContent=text;return node}
+function focusInitial(node){
+  userInteracted=false;const token=currentToken;
+  for(const delay of [0,100,300])focusTimers.push(setTimeout(()=>{
+    if(currentToken===token&&node.isConnected&&!userInteracted){window.focus();node.focus({preventScroll:true})}
+  },delay));
+}
+window.addEventListener('message',event=>{
+  if(event.source!==window.parent||event.data.type!=='streamlit:render')return;
+  const args=event.data.args;
+  if(args.token===currentToken)return;
+  clearTimeout(advanceTimer);clearTimeout(voiceTimer);focusTimers.forEach(clearTimeout);focusTimers=[];
+  abortVoice();
+  currentToken=args.token;currentArgs=args;pending=false;
+  voiceEnabled=args.voice_enabled===true;inputMethod='keyboard';
+  shownAt=performance.now()-(Number(args.elapsed_sec)||0)*1000;
+  root.replaceChildren();const card=document.createElement('div');card.className='card';
+  card.append(paragraph(args.question.replace(/\s*=\s*\?$/, ''),'question'));
+  if(args.phase==='saved'){
+    card.append(paragraph(args.correct?'○ せいかい':'× つぎのカードへ','status'));
+    const next=button('つぎへ',()=>emit('next'));card.append(next);
+    advanceTimer=setTimeout(()=>emit('next'),700);
+  }else if(args.phase==='confirm'){
+    card.append(paragraph(`${args.candidate}って いった？`,'status'));
+    card.append(paragraph('声の聞きまちがいかもしれないので、たしかめてね。'));
+    const yes=button('うん、その こたえ',()=>emit('confirm_voice'));
+    const no=button('ちがう、いいなおす',()=>emit('correct_voice'));
+    card.append(yes,no,paragraph('いいなおすと、声でもテンキーでも答えられます。'));focusInitial(no);
+  }else{
+    if(args.voice_failures)card.append(paragraph('声をたしかめられませんでした。もういちど、またはテンキーで答えてね。'));
+    const input=document.createElement('input');input.id='answer';input.type='text';input.inputMode='numeric';input.maxLength=2;
+    input.autocomplete='off';input.setAttribute('aria-label','こたえ');
+    const error=paragraph('','error');error.setAttribute('role','alert');
+    function answer(){
+      if(!/^\d{1,2}$/.test(input.value)){error.textContent='すうじを いれてね';input.focus();return}
+      emit('answer',{answer:Number(input.value),input_method:inputMethod});
+    }
+    input.oninput=()=>{inputMethod='keyboard';input.value=input.value.replace(/[０-９]/g,c=>String.fromCharCode(c.charCodeAt(0)-0xfee0)).replace(/[^0-9]/g,'').slice(0,2);error.textContent=''};
+    card.append(input,error,button('こたえる ↵',answer));
+    const SpeechRecognition=window.SpeechRecognition||window.webkitSpeechRecognition;
+    if(SpeechRecognition){
+      let mic;
+      function startVoice(manual=false){
+        if(recognition||pending||document.visibilityState==='hidden')return;
+        if(manual){voiceEnabled=true;stop.disabled=false}
+        if(!voiceEnabled)return;
+        const token=currentToken;const active=new SpeechRecognition();recognition=active;
+        active.lang='ja-JP';active.continuous=false;active.interimResults=false;active.maxAlternatives=1;
+        mic.disabled=true;mic.textContent='きいているよ…';let delivered=false;
+        active.onresult=result=>{
+          if(token!==currentToken||delivered||recognition!==active)return;delivered=true;
+          const text=result.results?.[0]?.[0]?.transcript||'';
+          emit('answer',{input_method:'voice',recognized_text:text});
+        };
+        active.onerror=error=>{
+          if(token!==currentToken||delivered||recognition!==active)return;delivered=true;
+          if(error.error!=='no-speech')voiceEnabled=false;
+          emit('recognition_failed',{input_method:'voice',recognized_text:''});
+        };
+        active.onend=()=>{
+          if(recognition!==active)return;recognition=null;
+          if(token===currentToken&&!delivered){delivered=true;emit('recognition_failed',{input_method:'voice',recognized_text:''})}
+        };
+        try{active.start()}catch(error){recognition=null;delivered=true;voiceEnabled=false;emit('recognition_failed',{input_method:'voice',recognized_text:''})}
+      }
+      mic=button('🎤 こえで つづける',()=>startVoice(true));card.append(mic);
+      const stop=button('こえを とめる',()=>{voiceEnabled=false;emit('voice_off')});
+      stop.disabled=!voiceEnabled;card.append(stop);
+      if(voiceEnabled){
+        voiceTimer=setTimeout(()=>startVoice(),350);
+      }
+    }else card.append(paragraph('このブラウザーでは声で答えられません。下のテンキーを使ってね。'));
+    const keys=document.createElement('div');keys.className='keys';
+    for(const value of ['1','2','3','4','5','6','7','8','9','けす','0','こたえる']){
+      keys.append(button(value,()=>{
+        inputMethod='keypad';
+        if(value==='こたえる'){answer();return}
+        input.value=value==='けす'?input.value.slice(0,-1):(input.value+value).slice(0,2);error.textContent='';input.focus();
+      }));
+    }
+    card.append(keys,paragraph('声が数字として分からないときは採点しません。音声ファイルは保存しません。'),button('設定へ もどる',()=>{voiceEnabled=false;emit('back')}));
+    input.onkeydown=event=>{if(event.key==='Enter'&&!event.isComposing&&!event.repeat){event.preventDefault();answer()}};
+    if(!voiceEnabled)focusInitial(input);
+  }
+  root.append(card);resize();
+});
+document.addEventListener('pointerdown',()=>userInteracted=true);
+document.addEventListener('keydown',()=>userInteracted=true);
+window.addEventListener('blur',()=>userInteracted=true);
+window.addEventListener('resize',resize);
+window.addEventListener('pagehide',()=>{voiceEnabled=false;abortVoice()});
+document.addEventListener('visibilitychange',()=>{
+  if(document.visibilityState==='hidden'){voiceEnabled=false;clearTimeout(voiceTimer);abortVoice();if(!pending)emit('voice_off')}
+});
+send('streamlit:componentReady',{apiVersion:1});
+</script></body></html>
