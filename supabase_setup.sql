@@ -8,7 +8,7 @@ create table if not exists public.math_attempts (
     question_order integer not null, selection_type text not null,
     problem_format text not null, operation text not null,
     number_range integer not null, left_operand integer not null,
-    right_operand integer not null,
+    right_operand integer not null, third_operand integer, second_operation text,
     carry boolean, borrowing boolean, crosses_10 boolean,
     zero_included boolean, doubles boolean,
     blank_position text, story_type text, unknown_type text,
@@ -20,15 +20,29 @@ create table if not exists public.math_attempts (
     hint_used boolean, dont_know_used boolean, retry_flag boolean,
     answer_is_10 boolean, operand_contains_10 boolean, near_10 boolean,
     commutative_pair text, round_size integer, round_completed boolean,
-    user_equation text, reading_help_used boolean,
+    user_equation text, reading_help_used boolean, visual_help_used boolean,
     hint_level smallint check (hint_level between 0 and 3)
 );
 alter table public.math_attempts add column if not exists round_size integer;
 alter table public.math_attempts add column if not exists round_completed boolean;
 alter table public.math_attempts add column if not exists user_equation text;
 alter table public.math_attempts add column if not exists reading_help_used boolean;
+alter table public.math_attempts add column if not exists visual_help_used boolean;
+alter table public.math_attempts add column if not exists third_operand integer;
+alter table public.math_attempts add column if not exists second_operation text;
 alter table public.math_attempts add column if not exists hint_level smallint check (hint_level between 0 and 3);
 alter table public.math_attempts add column if not exists dont_know_used boolean;
+alter table public.math_attempts add column if not exists learning_mode text;
+alter table public.math_attempts add column if not exists answer_range_min integer;
+alter table public.math_attempts add column if not exists answer_range_max integer;
+alter table public.math_attempts add column if not exists input_method text;
+alter table public.math_attempts add column if not exists recognized_text text;
+alter table public.math_attempts add column if not exists parsed_answer integer;
+alter table public.math_attempts add column if not exists recognition_success boolean;
+alter table public.math_attempts add column if not exists recognition_retry_count integer;
+alter table public.math_attempts add column if not exists first_attempt_correct boolean;
+alter table public.math_attempts add column if not exists session_elapsed_sec double precision;
+alter table public.math_attempts add column if not exists total_recognition_retry_count integer;
 create index if not exists math_attempts_user_sessions
     on public.math_attempts (user_id, session_id);
 

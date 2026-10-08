@@ -156,12 +156,17 @@ def review_pool(records, user_id, scope, subject, now=None):
     if subject == "math":
         mode, limit, special = math_settings(scope, "addition", 10, "auto")
         operations = ("addition", "subtraction") if mode == "mix" else (mode,)
-        base = [q for operation in operations for fn in (learning.problem_pool, word_pool)
-                for q in fn(operation, limit, special)]
+        pools = (learning.problem_pool, word_pool, learning.get_problem_pool("fill_blank"),
+                 learning.get_problem_pool("three_numbers"), learning.get_problem_pool("three_word_problem"))
+        base = [q for operation in operations for fn in pools
+                for q in fn(operation, limit, special)
+                if q.get("problem_format") not in ("three_numbers", "three_word_problem")
+                or (q.get("second_operation") in operations
+                    and (special == "auto" or bool(q.get("carry") or q.get("borrowing")) == (special == "with")))]
         identifier = "problem_id"
         prior = {r.get(identifier) for r in rows}
         history = [q for size in (10, 20) for operation in ("addition", "subtraction")
-                   for fn in (learning.problem_pool, word_pool) for q in fn(operation, size)
+                   for fn in pools for q in fn(operation, size)
                    if q[identifier] in prior]
     else:
         category, _, ceiling = japanese_settings(scope, "mix", None)

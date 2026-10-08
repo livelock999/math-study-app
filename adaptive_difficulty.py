@@ -16,8 +16,17 @@ from japanese_questions import QUESTIONS, CATEGORIES
 def math_level(problem):
     if problem.get("carry") or problem.get("borrowing"):
         return 3
-    largest = max(problem["left_operand"], problem["right_operand"], problem["correct_answer"])
+    left, right = problem["left_operand"], problem["right_operand"]
+    result = left + right if problem["operation"] == "addition" else left - right
+    largest = max(left, right, result)
+    if problem.get("problem_format") in ("three_numbers", "three_word_problem"):
+        third = problem["third_operand"]
+        final = result + third if problem["second_operation"] == "addition" else result - third
+        largest = max(largest, third, final)
     if problem["number_range"] == 10:
+        if problem.get("problem_format") == "three_word_problem":
+            # 文章題は3数量がすべて1以上。最大3以下では++の候補が1問だけになる。
+            return 1 if largest <= 5 else 2 if largest <= 7 else 3
         return 1 if largest <= 3 else 2 if largest <= 6 else 3
     return 1 if largest <= 10 else 2
 
@@ -26,6 +35,7 @@ def _ordinary(records, user_id, subject, now):
     identifier = "problem_id" if subject == "math" else "question_id"
     return [r for r in eligible_records(records, user_id, now)
             if r.get("selection_type") == "normal" and r.get("attempt_count") == 1
+            and r.get("learning_mode") != "flashcard"
             and r.get(identifier) and not r.get("test_mode")]
 
 
@@ -93,10 +103,16 @@ def plan_math(records, user_id, mode="addition", limit=10, count=10, special="au
               problem_format="calculation", now=None, rng=None):
     if mode not in ("addition", "subtraction", "mix") or type(count) is not int or count not in (5, 10, 20):
         raise ValueError("算数の出題設定が不正です。")
-    if problem_format not in ("calculation", "word_problem"):
+    if problem_format not in ("calculation", "word_problem", "fill_blank", "three_numbers", "three_word_problem"):
         raise ValueError("問題の形式が不正です。")
     rows = _ordinary(records, user_id, "math", now)
-    pool_fn = problem_pool if problem_format == "calculation" else word_pool
+    if problem_format in ("three_numbers", "three_word_problem"):
+        return _plan_three(rows, mode, limit, count, special, rng or random.Random(), problem_format)
+    if problem_format == "fill_blank":
+        from learning import get_problem_pool
+        pool_fn = get_problem_pool(problem_format)
+    else:
+        pool_fn = problem_pool if problem_format == "calculation" else word_pool
     operations = ("addition", "subtraction") if mode == "mix" else (mode,)
     rng = rng or random.Random()
     items, decisions = [], {}
@@ -112,6 +128,27 @@ def plan_math(records, user_id, mode="addition", limit=10, count=10, special="au
         items.extend(_pick(pool, decision["level"], needed, math_level, "problem_id", relevant, rng))
     rng.shuffle(items)
     return {"items": items, "decisions": decisions, "message": _message(items, count)}
+
+
+def _plan_three(rows, mode, limit, count, special, rng, problem_format="three_numbers"):
+    if problem_format == "three_word_problem":
+        from three_word import mode_pool
+    else:
+        from three_numbers import mode_pool
+    pool = mode_pool(mode, limit, special)
+    patterns = sorted({(q["operation"], q["second_operation"]) for q in pool})
+    items, decisions = [], {}
+    for index, (first, second) in enumerate(patterns):
+        candidates = [q for q in pool if q["operation"] == first and q["second_operation"] == second]
+        relevant = [r for r in rows if r.get("problem_format") == problem_format
+                    and r.get("number_range") == limit and r.get("operation") == first
+                    and r.get("second_operation") == second]
+        decision = _decide(relevant, candidates, "math")
+        decisions[f"{first}_{second}"] = decision
+        needed = count // len(patterns) + int(index < count % len(patterns))
+        items.extend(_pick(candidates, decision["level"], needed, math_level, "problem_id", relevant, rng))
+    rng.shuffle(items)
+    return {"items": items, "decisions": decisions, "message": _message(items, count), "problem_format": problem_format}
 
 
 def plan_japanese(records, user_id, category="mix", count=10, particle_level=None, now=None, rng=None, particle_ceiling=None):
@@ -153,6 +190,11 @@ def show_reason(plan, subject):
     if plan.get("message"):
         st.info(plan["message"])
     labels = {"addition": "たし算", "subtraction": "ひき算"} if subject == "math" else CATEGORIES
+    if subject == "math":
+        labels.update(addition_addition="3つの数のたし算", subtraction_subtraction="3つの数のひき算",
+                      addition_subtraction="たし算からひき算", subtraction_addition="ひき算からたし算")
+        if plan.get("problem_format") == "three_word_problem":
+            labels = {key: f"{label}の文章題" for key, label in labels.items()}
     with st.expander("保護者向け：おまかせ難易度の理由"):
         if plan.get("scope_label"):
             st.write(f"学校で習う範囲：{plan['scope_label']}")

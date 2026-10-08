@@ -275,6 +275,14 @@ _MATH_HINTS = {
 }
 
 
+_THREE_WORD_STORIES = {
+    "increase_twice": "りんごが {a}こ あります。{b}こ もらいました。そのあと、また {c}こ もらいました。いま なんこ ありますか。",
+    "decrease_twice": "りんごが {a}こ あります。{b}こ たべました。そのあと、また {c}こ たべました。のこりは なんこ ですか。",
+    "increase_then_decrease": "りんごが {a}こ あります。{b}こ もらいました。そのあと、{c}こ たべました。のこりは なんこ ですか。",
+    "decrease_then_increase": "りんごが {a}こ あります。{b}こ たべました。そのあと、{c}こ もらいました。いま なんこ ありますか。",
+}
+
+
 def _known_math_item(item):
     from learning import make_problem
     from words import make_word_problem
@@ -294,10 +302,23 @@ def _known_math_item(item):
                 return None
         elif item.get("problem_format") == "calculation":
             known = make_problem(operation, limit, left, right)
+        elif item.get("problem_format") == "fill_blank":
+            from fill_blank import make_fill_problem
+            known = make_fill_problem(operation, limit, left, right, item.get("blank_position"))
+        elif item.get("problem_format") == "three_numbers":
+            from three_numbers import make_three_problem
+            known = make_three_problem(operation, item.get("second_operation"), limit,
+                                       left, right, item.get("third_operand"))
+        elif item.get("problem_format") == "three_word_problem":
+            from three_word import make_three_word_problem
+            known = make_three_word_problem(item.get("story_type"), limit, left, right, item.get("third_operand"))
+            approved = _THREE_WORD_STORIES.get(item.get("story_type"))
+            if approved is None or item.get("question_text") != approved.format(a=left, b=right, c=item.get("third_operand")):
+                return None
         else:
             return None
         for field in ("problem_id", "question_text", "correct_answer", "operation",
-                      "carry", "borrowing", "story_type", "unknown_type"):
+                      "carry", "borrowing", "story_type", "unknown_type", "third_operand", "second_operation"):
             if item.get(field) != known.get(field):
                 return None
         return known
@@ -344,6 +365,11 @@ def canonical_fields(subject, item):
         if known is None:
             return {}
         from words import guidance
+        if known["problem_format"] in ("fill_blank", "three_numbers", "three_word_problem"):
+            # 新教材の文はひらがなで用意する。既存計算用の結果・解説テンプレートは適用しない。
+            question = _mapping([known["question_text"]])
+            return {"question": question, "question_text": dict(question),
+                    "hint_text": {}, "explanation_text": {}}
         if known["problem_format"] == "word_problem":
             hint_key = known["story_type"]
         elif known["operation"] == "addition":

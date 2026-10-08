@@ -134,8 +134,24 @@ def _weak_keys(rows, subject):
 
 
 def _math_key(row):
+    if row.get("problem_format") in ("three_numbers", "three_word_problem"):
+        key = (row["problem_format"], row.get("operation"), row.get("number_range"),
+               row.get("second_operation"), bool(row.get("carry")), bool(row.get("borrowing")))
+        return (*key, row.get("story_type")) if row["problem_format"] == "three_word_problem" else key
     special = row.get("carry") if row.get("operation") == "addition" else row.get("borrowing")
-    return row.get("problem_format"), row.get("operation"), row.get("number_range"), bool(special)
+    key = row.get("problem_format"), row.get("operation"), row.get("number_range"), bool(special)
+    return (*key, row.get("blank_position")) if row.get("problem_format") == "fill_blank" else key
+
+
+def math_name(question):
+    name = "たし算" if question.get("operation") == "addition" else "ひき算"
+    if question.get("problem_format") == "fill_blank":
+        name += "の穴埋め（左の□）" if question["blank_position"] == "left_operand" else "の穴埋め（右の□）"
+    elif question.get("problem_format") in ("three_numbers", "three_word_problem"):
+        name = f"3つの数の{name}" if question["operation"] == question["second_operation"] else "3つの数のたし算とひき算"
+        if question["problem_format"] == "three_word_problem":
+            name += "の文章題"
+    return name
 
 
 def _plan(pool, schedules, weak, subject, now, count):
@@ -148,7 +164,7 @@ def _plan(pool, schedules, weak, subject, now, count):
     for question in pool:
         identifier = question[id_field]
         state = schedules.get(identifier)
-        name = ("たし算" if question.get("operation") == "addition" else "ひき算") if subject == "math" else CATEGORIES[question["category"]]
+        name = math_name(question) if subject == "math" else CATEGORIES[question["category"]]
         if state:
             if state["due_date"] > now.date():
                 continue
@@ -167,7 +183,8 @@ def _plan(pool, schedules, weak, subject, now, count):
         # 未回答の補充は簡単な教材を先にし、同じ難度はIDで確定。
         difficulty = question.get("difficulty", int(bool(question.get("carry") or question.get("borrowing"))))
         if subject == "math":
-            difficulty = (difficulty, question["problem_format"] != "calculation", question["left_operand"] + question["right_operand"])
+            difficulty = (difficulty, question["problem_format"] != "calculation",
+                          question["left_operand"] + question["right_operand"] + (question.get("third_operand") or 0))
         ranked.append(((rank, order, difficulty, identifier), question, reason))
     ranked.sort(key=lambda item: item[0])
     items, reasons, seen = [], {}, set()
@@ -190,7 +207,7 @@ def _plan(pool, schedules, weak, subject, now, count):
 
 def plan_math(records, user_id, limit=10, now=None, count=5, candidate_pool=None):
     """現在の数の範囲の計算・文章題。教材を再生成し、履歴の本文は使わない。"""
-    from learning import problem_pool
+    from learning import problem_pool, get_problem_pool
     from words import word_pool
     current = _now(now)
     rows = eligible_records(records, user_id, current)
@@ -200,6 +217,9 @@ def plan_math(records, user_id, limit=10, now=None, count=5, candidate_pool=None
     for operation in ("addition", "subtraction"):
         pool.extend(problem_pool(operation, limit))
         pool.extend(word_pool(operation, limit))
+        pool.extend(get_problem_pool("fill_blank")(operation, limit))
+        pool.extend(get_problem_pool("three_numbers")(operation, limit))
+        pool.extend(get_problem_pool("three_word_problem")(operation, limit))
     return _limited_plan(pool, rows, user_id, "math", current, count)
 
 

@@ -60,16 +60,18 @@ def report_screen():
                 review_table.append({"教科": title, "練習": label, "回答数": result["count"],
                                      "正答率": rate(result["rate"]), "ヒント使用率": rate(result["hint_rate"])})
         st.dataframe(review_table, hide_index=True, width="stretch")
-    st.write("**計算・文章題・国語読解を並べて見る**")
+    st.write("**計算・3つの数・□の数・文章題・3つの数の文章題・国語読解を並べて見る**")
     st.dataframe([{"項目": g["label"], "初回評価数": g["count"], "正答率": rate(g["rate"]),
                    "ヒント使用率": rate(g["hint_rate"]),
                    "自力正答率": rate(g["unaided_rate"]), "自力回答数": g["unaided_count"],
                    "ヒントあり正答率": rate(g["assisted_rate"]), "ヒントあり回答数": g["assisted_count"],
                    "ヒント記録不明": g["hint_unknown_count"],
+                   "図を使用した回答": g["visual_used_count"] if g["label"].startswith("算数") else None,
                    "次の練習の目安": g["status"]} for g in report["groups"]],
                  hide_index=True, width="stretch")
     st.caption("文章題の各段階は重複する回答です。未評価の項目は分母から除きます。"
                "国語読解は自力読みのみ。5問未満は判断保留、5問以上で80%未満なら練習を提案します。")
+    st.caption("算数の図を見て答えた回答はヒントありに含めます。回答後に開いた図は使用数に含めません。旧履歴の図使用は記録なしです。")
     st.caption("ヒント使用率は使用の有無を記録できた回答のみで計算します。"
                "以前の履歴など、記録が不明な回答は自力にもヒントありにも含めません。"
                "自力正答率はヒントなしの回答、ヒントあり正答率はヒントを使った回答で計算します。"

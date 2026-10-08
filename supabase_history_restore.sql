@@ -1,6 +1,16 @@
 -- Additive migration: existing answer rows, permissions and settings are kept.
--- Apply supabase_attempts.sql and supabase_japanese.sql first, then this file in
+-- Apply supabase_attempts.sql, supabase_japanese.sql and
+-- supabase_math_visuals.sql and supabase_three_numbers.sql first, then this file in
 -- the learning app project's SQL Editor. No DELETE/UPDATE access is granted.
+-- Fill-blank support changes the validation of existing columns. Visual help
+-- adds one nullable boolean through supabase_math_visuals.sql. Neither migration
+-- rewrites existing answers; their unknown visual-help value remains NULL.
+-- Re-run this file after the column migration before publishing the app.
+-- Three-number support adds nullable third_operand / second_operation through
+-- supabase_three_numbers.sql; existing two-number histories retain NULLs.
+-- Three-number word problems reuse those columns. This function update alone
+-- adds their format/story/ID validation; no further column migration is needed.
+-- Apply supabase_flashcards.sql first for the nullable card/voice metadata.
 -- JSON checksums detect accidental file edits in the app; they are not an
 -- authentication mechanism. This RPC can only run as the server's service_role.
 begin;
@@ -34,6 +44,33 @@ begin
     if current_user <> 'service_role' then
         raise exception 'service role required' using errcode = '42501';
     end if;
+    -- jsonb_populate_record ignores unknown keys. Fail closed if the column
+    -- migration was skipped, rather than silently losing the visual-help flag.
+    if not exists(select 1 from pg_catalog.pg_attribute
+                  where attrelid = 'public.math_attempts'::regclass
+                    and attname = 'visual_help_used' and not attisdropped
+                    and atttypid = 'boolean'::regtype) then
+        raise exception 'apply supabase_math_visuals.sql before restoring history';
+    end if;
+    if not exists(select 1 from pg_catalog.pg_attribute
+                  where attrelid = 'public.math_attempts'::regclass
+                    and attname = 'third_operand' and not attisdropped
+                    and atttypid = 'integer'::regtype)
+       or not exists(select 1 from pg_catalog.pg_attribute
+                     where attrelid = 'public.math_attempts'::regclass
+                       and attname = 'second_operation' and not attisdropped
+                       and atttypid = 'text'::regtype) then
+        raise exception 'apply supabase_three_numbers.sql before restoring history';
+    end if;
+    -- All nullable fields must exist with the expected PostgreSQL type.
+    for field, value in select e.key, e.value from jsonb_each('{"learning_mode":"text","answer_range_min":"integer","answer_range_max":"integer","input_method":"text","recognized_text":"text","parsed_answer":"integer","recognition_success":"boolean","recognition_retry_count":"integer","first_attempt_correct":"boolean","session_elapsed_sec":"double precision","total_recognition_retry_count":"integer"}'::jsonb) e loop
+        if not exists(select 1 from pg_catalog.pg_attribute
+                      where attrelid = 'public.math_attempts'::regclass
+                        and attname = field and not attisdropped
+                        and atttypid = (value #>> '{}')::regtype) then
+            raise exception 'apply supabase_flashcards.sql before restoring history';
+        end if;
+    end loop;
     if jsonb_typeof(backup) is distinct from 'object'
        or octet_length(backup::text) > 10485760
        or backup->>'format' is distinct from 'family-study-answer-history'
@@ -71,7 +108,7 @@ begin
     perform pg_advisory_xact_lock(61081008);
 
     -- Entry is [JSON type, required]. Nullable historical fields stay NULL.
-    spec := '{"attempt_id":["string",true],"user_id":["string",true],"session_id":["string",true],"datetime":["string",true],"problem_id":["string",true],"question_order":["integer",true],"selection_type":["string",true],"problem_format":["string",true],"operation":["string",true],"number_range":["integer",true],"left_operand":["integer",true],"right_operand":["integer",true],"carry":["boolean",false],"borrowing":["boolean",false],"crosses_10":["boolean",false],"zero_included":["boolean",false],"doubles":["boolean",false],"blank_position":["string",false],"story_type":["string",false],"unknown_type":["string",false],"operation_selection_correct":["boolean",false],"equation_correct":["boolean",false],"calculation_correct":["boolean",false],"question_text":["string",true],"correct_answer":["integer",true],"user_answer":["integer",false],"is_correct":["boolean",true],"response_time_sec":["number",true],"attempt_count":["integer",true],"hint_used":["boolean",false],"dont_know_used":["boolean",false],"retry_flag":["boolean",false],"answer_is_10":["boolean",false],"operand_contains_10":["boolean",false],"near_10":["boolean",false],"commutative_pair":["string",false],"round_size":["integer",false],"round_completed":["boolean",false],"user_equation":["string",false],"reading_help_used":["boolean",false],"hint_level":["integer",false]}'::jsonb;
+    spec := '{"attempt_id":["string",true],"user_id":["string",true],"session_id":["string",true],"datetime":["string",true],"problem_id":["string",true],"question_order":["integer",true],"selection_type":["string",true],"problem_format":["string",true],"operation":["string",true],"number_range":["integer",true],"left_operand":["integer",true],"right_operand":["integer",true],"carry":["boolean",false],"borrowing":["boolean",false],"crosses_10":["boolean",false],"zero_included":["boolean",false],"doubles":["boolean",false],"blank_position":["string",false],"story_type":["string",false],"unknown_type":["string",false],"operation_selection_correct":["boolean",false],"equation_correct":["boolean",false],"calculation_correct":["boolean",false],"question_text":["string",true],"correct_answer":["integer",true],"user_answer":["integer",false],"is_correct":["boolean",true],"response_time_sec":["number",true],"attempt_count":["integer",true],"hint_used":["boolean",false],"dont_know_used":["boolean",false],"retry_flag":["boolean",false],"answer_is_10":["boolean",false],"operand_contains_10":["boolean",false],"near_10":["boolean",false],"commutative_pair":["string",false],"round_size":["integer",false],"round_completed":["boolean",false],"user_equation":["string",false],"reading_help_used":["boolean",false],"hint_level":["integer",false],"visual_help_used":["boolean",false],"third_operand":["integer",false],"second_operation":["string",false],"learning_mode":["string",false],"answer_range_min":["integer",false],"answer_range_max":["integer",false],"input_method":["string",false],"recognized_text":["string",false],"parsed_answer":["integer",false],"recognition_success":["boolean",false],"recognition_retry_count":["integer",false],"first_attempt_correct":["boolean",false],"session_elapsed_sec":["number",false],"total_recognition_retry_count":["integer",false]}'::jsonb;
     for item in select r from jsonb_array_elements(backup->'math') r loop
         if jsonb_typeof(item) <> 'object'
            or (select count(*) from jsonb_object_keys(item)) <> (select count(*) from jsonb_object_keys(spec))
@@ -103,19 +140,107 @@ begin
            or (item->>'hint_level')::integer not between 0 and 3 then
             raise exception 'invalid math answer values';
         end if;
+        if item->'visual_help_used' = 'true'::jsonb and item->'hint_used' is distinct from 'true'::jsonb then
+            raise exception 'visual help requires hint-used flag';
+        end if;
         if item->>'selection_type' not in ('normal','weak_area','retry','review','review_retry')
            or item->>'operation' not in ('addition','subtraction')
-           or item->>'problem_format' not in ('calculation','word_problem')
+           or item->>'problem_format' not in ('calculation','word_problem','fill_blank','three_numbers','three_word_problem')
            or (item->>'number_range')::integer not in (10,20)
            or (item->>'left_operand')::integer not between 0 and (item->>'number_range')::integer
            or (item->>'right_operand')::integer not between 0 and (item->>'number_range')::integer
            or (item->>'correct_answer')::integer not between 0 and (item->>'number_range')::integer
-           or (item->>'user_answer')::integer not between 0 and 99
+           or (item->>'user_answer')::integer not between 0 and 999
            or ((item->>'round_size')::integer is not null and (item->>'round_size')::integer < (item->>'question_order')::integer)
-           or (item->>'correct_answer')::integer <> (case when item->>'operation'='addition'
+           or (case when item->>'operation'='addition'
+                  then (item->>'left_operand')::integer + (item->>'right_operand')::integer
+                  else (item->>'left_operand')::integer - (item->>'right_operand')::integer end)
+                  not between 0 and (item->>'number_range')::integer then
+            raise exception 'invalid math problem or answer';
+        end if;
+        if item->>'problem_format' = 'three_word_problem' then
+            if item->>'story_type' is null or item->>'story_type' not in
+                   ('increase_twice','decrease_twice','increase_then_decrease','decrease_then_increase')
+               or item->>'unknown_type' is distinct from 'result'
+               or (item->>'left_operand')::integer < 1
+               or (item->>'right_operand')::integer < 1
+               or (item->>'third_operand')::integer < 1
+               or item->>'operation' is distinct from (case when item->>'story_type' in ('increase_twice','increase_then_decrease')
+                       then 'addition' else 'subtraction' end)
+               or item->>'second_operation' is distinct from (case when item->>'story_type' in ('increase_twice','decrease_then_increase')
+                       then 'addition' else 'subtraction' end) then
+                raise exception 'invalid three-number word story, operands or operations';
+            end if;
+        end if;
+        if item->>'problem_format' in ('three_numbers','three_word_problem') then
+            if item->'third_operand' = 'null'::jsonb or item->'second_operation' = 'null'::jsonb
+               or (item->>'third_operand')::integer not between 0 and (item->>'number_range')::integer
+               or item->>'second_operation' not in ('addition','subtraction')
+               or (item->>'problem_format' = 'three_numbers' and item->>'problem_id' is distinct from concat('three_numbers_v1_',item->>'operation','_',
+                     item->>'second_operation','_',item->>'number_range','_',item->>'left_operand','_',
+                     item->>'right_operand','_',item->>'third_operand'))
+               or (item->>'problem_format' = 'three_word_problem' and item->>'problem_id' is distinct from concat('three_word_v1_',
+                     item->>'story_type','_',item->>'number_range','_',item->>'left_operand','_',
+                     item->>'right_operand','_',item->>'third_operand'))
+               or (item->>'correct_answer')::integer <> (case when item->>'second_operation'='addition'
+                     then (case when item->>'operation'='addition'
+                           then (item->>'left_operand')::integer + (item->>'right_operand')::integer
+                           else (item->>'left_operand')::integer - (item->>'right_operand')::integer end)
+                           + (item->>'third_operand')::integer
+                     else (case when item->>'operation'='addition'
+                           then (item->>'left_operand')::integer + (item->>'right_operand')::integer
+                           else (item->>'left_operand')::integer - (item->>'right_operand')::integer end)
+                           - (item->>'third_operand')::integer end) then
+                raise exception 'invalid three-number operand, operation, answer or ID';
+            end if;
+        elsif item->'third_operand' <> 'null'::jsonb or item->'second_operation' <> 'null'::jsonb then
+            raise exception 'two-number history must not have a third operand or operation';
+        elsif item->>'problem_format' = 'fill_blank' then
+            if item->>'blank_position' is null or item->>'blank_position' not in ('left_operand','right_operand')
+               or item->>'problem_id' is distinct from concat('fill_blank_v1_',item->>'operation','_',
+                     item->>'number_range','_',item->>'blank_position','_',item->>'left_operand','_',item->>'right_operand')
+               or (item->>'correct_answer')::integer <> (case when item->>'blank_position'='left_operand'
+                     then (item->>'left_operand')::integer else (item->>'right_operand')::integer end) then
+                raise exception 'invalid fill-blank position, answer or ID';
+            end if;
+        elsif (item->>'correct_answer')::integer <> (case when item->>'operation'='addition'
                   then (item->>'left_operand')::integer + (item->>'right_operand')::integer
                   else (item->>'left_operand')::integer - (item->>'right_operand')::integer end) then
-            raise exception 'invalid math problem or answer';
+            raise exception 'invalid math result answer';
+        end if;
+        if item->>'learning_mode' not in ('normal','flashcard','retry','weak_practice')
+           or item->>'input_method' not in ('voice','keyboard','keypad')
+           or ((item->>'answer_range_min' is null) <> (item->>'answer_range_max' is null))
+           or (item->>'answer_range_min')::integer < 0
+           or (item->>'answer_range_max')::integer > 20
+           or (item->>'answer_range_min')::integer > (item->>'correct_answer')::integer
+           or (item->>'answer_range_max')::integer < (item->>'correct_answer')::integer
+           or (item->>'recognition_retry_count')::integer < 0
+           or (item->>'total_recognition_retry_count')::integer < 0
+           or (item->>'total_recognition_retry_count')::integer < (item->>'recognition_retry_count')::integer
+           or (item->>'session_elapsed_sec')::double precision < (item->>'response_time_sec')::double precision
+           or ((item->>'attempt_count')::integer = 1 and item->'first_attempt_correct' <> 'null'::jsonb
+               and item->'first_attempt_correct' is distinct from item->'is_correct') then
+            raise exception 'invalid flashcard mode, range, retries, elapsed time or first correctness';
+        end if;
+        if item->>'input_method' = 'voice' then
+            if item->>'recognized_text' is null
+               or item->'recognition_success' is distinct from 'true'::jsonb
+               or item->'parsed_answer' is distinct from item->'user_answer'
+               or item->'parsed_answer' = 'null'::jsonb
+               or (item->>'parsed_answer')::integer not between 0 and 99
+               or item->'recognition_retry_count' = 'null'::jsonb then
+                raise exception 'invalid accepted voice recognition';
+            end if;
+        elsif item->'recognized_text' <> 'null'::jsonb
+           or item->'parsed_answer' <> 'null'::jsonb
+           or item->'recognition_success' <> 'null'::jsonb then
+            raise exception 'non-voice answers must not contain recognition metadata';
+        end if;
+        if item->>'learning_mode' = 'flashcard'
+           and (item->>'problem_format' <> 'calculation' or item->>'input_method' is null
+                or (item->>'user_answer')::integer not between 0 and 99) then
+            raise exception 'invalid flashcard format or input method';
         end if;
         math_row := jsonb_populate_record(null::public.math_attempts, item);
         insert into public.math_attempts select math_row.* on conflict(attempt_id) do nothing;
