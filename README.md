@@ -185,7 +185,8 @@ python -m venv .venv
 既存Supabaseでは `supabase_school_scope.sql` 全体をSQL Editorで実行してから、関連ファイルを公開してください。
 専用テーブルを追加するだけで、既存履歴の削除・移行は不要です。RLS有効、anon/authenticatedの直接アクセス禁止、
 service_roleにはselect/insert/updateのみを付与します。新規用 `supabase_setup.sql` にも同じ定義を含めています。
-ローカルSQLiteは最初の設定保存時にテーブルを追加します。今回の作業では公開・本番SQL適用は行っていません。
+ローカルSQLiteは最初の設定保存時にテーブルを追加します。
+2026-10-08に学校範囲とおまかせ難易度を公開し、既存Supabaseへ追加SQLを適用しました。
 
 ### 週間レポート・学習目標・復習予定
 
