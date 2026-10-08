@@ -19,6 +19,7 @@ from text_display import component_display, plain_label
 from practice_mode import is_test_mode, is_test_round, switch_mode, write_learning_answer
 from daily_review import plan_math
 from parent_insights import adaptive_math, math_hint_steps, review_forecast
+from ui_theme import apply_theme, brand, card_heading
 
 st.set_page_config(page_title="さんすう・こくご れんしゅう", page_icon="📚", layout="centered")
 keyboard = components.declare_component("math_keyboard", path=str(Path(__file__).parent / "keyboard"))
@@ -112,11 +113,13 @@ def user_screen():
             if st.button("保護者のテストを始める（記録しない）", key="parent_test_start", use_container_width=True):
                 switch_mode(st.session_state, True)
                 st.rerun()
-    for user_id, name in USERS.items():
-        if st.button(name, key=f"select_{user_id}", type="primary", use_container_width=True):
-            st.session_state.user_id = user_id
-            st.session_state.screen = "settings"
-            st.rerun()
+    with st.container(key="user_cards"):
+        card_heading("✏️", "きょうも すこしずつ。", "なまえを えらんで はじめよう。")
+        for user_id, name in USERS.items():
+            if st.button(name, key=f"select_{user_id}", type="primary", use_container_width=True):
+                st.session_state.user_id = user_id
+                st.session_state.screen = "settings"
+                st.rerun()
 
 
 def settings_screen():
@@ -129,68 +132,77 @@ def settings_screen():
             st.session_state.screen = "practice"
             st.rerun()
         st.caption("スタートを押すとあたらしく始めます。これまで保存した回答は残ります。")
-    modes = {"addition": "たしざん", "subtraction": "ひきざん", "mix": "ミックス"}
-    mode = st.radio("もんだい", list(modes), format_func=modes.get, horizontal=True)
-    limit = st.radio("かずの はんい", [10, 20], format_func=lambda n: f"{n}まで", horizontal=True)
-    st.session_state.math_review_limit = limit
-    count = st.radio("もんだいの かず", [5, 10, 20], index=[5, 10, 20].index(st.session_state.get("practice_count", 10)),
-                     format_func=lambda n: f"{n}もん", horizontal=True, key="problem_count")
-    choices = {"auto": "おまかせ", "none": "なし", "with": "あり"}
-    special = st.radio("くりあがり・くりさがり", list(choices), format_func=choices.get,
-                       horizontal=True, key="special_mode")
-    formats = {"calculation": "けいさん", "word_problem": "ぶんしょうだい"}
-    problem_format = st.radio("もんだいの かたち", list(formats), format_func=formats.get,
-                              horizontal=True, key="problem_format")
-    error = selection_error(mode, limit, count, special, problem_format)
-    if error:
-        st.info(error)
-    st.caption(f"1かい {count}もん。まちがえた もんだいは あとで れんしゅうできるよ。")
-    if st.button(plain_label("れんしゅう スタート", st.session_state.user_id), type="primary", use_container_width=True, disabled=bool(error)):
-        st.session_state.attempt_counts = {}
-        start_round(generate_problems(mode, limit, count, special, problem_format), "normal")
-        st.rerun()
-    if st.button("きょうの ふくしゅう", key="math_daily_review", use_container_width=True):
-        try:
-            records = load_math_review_history(st.session_state.user_id)
-            plan = plan_math(records, st.session_state.user_id, limit=limit, count=5)
-        except (sqlite3.Error, OSError, ValueError, KeyError, TypeError):
-            st.error("復習の履歴を読み込めませんでした。接続を確認して、もういちど押してください。")
-        else:
-            if plan["items"]:
-                st.session_state.attempt_counts = {}
-                start_round(plan["items"], "review", review_reasons=plan["reasons"])
-                st.rerun()
-            else:
-                st.info(plan["message"])
-    if st.button("にた もんだいで れんしゅう", key="math_similar", use_container_width=True):
-        try:
-            records = load_math_review_history(st.session_state.user_id)
-            plan = adaptive_math(records, st.session_state.user_id, limit=limit, count=5)
-        except (sqlite3.Error, OSError, ValueError, KeyError, TypeError):
-            st.error("練習の履歴を読み込めませんでした。もういちど押してください。")
-        else:
-            if plan["items"]:
-                st.session_state.attempt_counts = {}
-                start_round(plan["items"], "weak_area", review_reasons=plan.get("reasons"))
-                st.rerun()
-            else:
-                st.info(plan["message"])
-    with st.expander("保護者向け：復習の予定"):
-        if st.button("復習の予定をみる", key="math_review_forecast"):
+    review_card = st.container(key="review_card_math")
+    with st.container(key="practice_card_math"):
+        card_heading("✏️", "さんすうの れんしゅう", "じぶんの ペースで、ひとつずつ。")
+        with st.expander("もんだいを えらぶ・せってい"):
+            modes = {"addition": "たしざん", "subtraction": "ひきざん", "mix": "ミックス"}
+            mode = st.radio("もんだい", list(modes), format_func=modes.get, horizontal=True)
+            limit = st.radio("かずの はんい", [10, 20], format_func=lambda n: f"{n}まで", horizontal=True)
+            st.session_state.math_review_limit = limit
+            count = st.radio("もんだいの かず", [5, 10, 20], index=[5, 10, 20].index(st.session_state.get("practice_count", 10)),
+                             format_func=lambda n: f"{n}もん", horizontal=True, key="problem_count")
+            choices = {"auto": "おまかせ", "none": "なし", "with": "あり"}
+            special = st.radio("くりあがり・くりさがり", list(choices), format_func=choices.get,
+                               horizontal=True, key="special_mode")
+            formats = {"calculation": "けいさん", "word_problem": "ぶんしょうだい"}
+            problem_format = st.radio("もんだいの かたち", list(formats), format_func=formats.get,
+                                      horizontal=True, key="problem_format")
+            error = selection_error(mode, limit, count, special, problem_format)
+            if error:
+                st.info(error)
+        st.caption(f"1かい {count}もん。まちがえた もんだいは あとで れんしゅうできるよ。")
+        if st.button(plain_label("れんしゅう スタート", st.session_state.user_id), type="primary", use_container_width=True, disabled=bool(error)):
+            st.session_state.attempt_counts = {}
+            start_round(generate_problems(mode, limit, count, special, problem_format), "normal")
+            st.rerun()
+    with review_card:
+        card_heading("🌱", "きょうの ふくしゅう", "さんすうを 5もん。きのうの がんばりを、きょうの じしんに。")
+        if st.button("きょうの ふくしゅう", key="math_daily_review", use_container_width=True):
             try:
-                forecast = review_forecast(load_math_review_history(st.session_state.user_id),
-                                           st.session_state.user_id, "math", limit=limit)
+                records = load_math_review_history(st.session_state.user_id)
+                plan = plan_math(records, st.session_state.user_id, limit=limit, count=5)
             except (sqlite3.Error, OSError, ValueError, KeyError, TypeError):
-                st.error("復習の予定を読み込めませんでした。もういちど押してください。")
+                st.error("復習の履歴を読み込めませんでした。接続を確認して、もういちど押してください。")
             else:
-                st.write(f"きょう：{forecast['today_count']}問 ／ あした：{forecast['tomorrow_count']}問")
-                st.caption("きょうの復習は1日5問まで。きょうの数は回答済みを除いた残りです。基本問題の補充は含みません。")
-    if st.button(plain_label("学習履歴", st.session_state.user_id), key="history_settings", use_container_width=True):
-        open_history("settings")
-    if st.button(plain_label("学習レポート", st.session_state.user_id), key="report_settings", use_container_width=True):
-        open_report("settings")
-    if st.button(plain_label("学習カレンダー・ごほうび", st.session_state.user_id), key="calendar_settings", use_container_width=True):
-        open_calendar("settings")
+                if plan["items"]:
+                    st.session_state.attempt_counts = {}
+                    start_round(plan["items"], "review", review_reasons=plan["reasons"])
+                    st.rerun()
+                else:
+                    st.info(plan["message"])
+    with st.expander("もっと れんしゅう・ふくしゅうの よてい"):
+        if st.button("にた もんだいで れんしゅう", key="math_similar", use_container_width=True):
+            try:
+                records = load_math_review_history(st.session_state.user_id)
+                plan = adaptive_math(records, st.session_state.user_id, limit=limit, count=5)
+            except (sqlite3.Error, OSError, ValueError, KeyError, TypeError):
+                st.error("練習の履歴を読み込めませんでした。もういちど押してください。")
+            else:
+                if plan["items"]:
+                    st.session_state.attempt_counts = {}
+                    start_round(plan["items"], "weak_area", review_reasons=plan.get("reasons"))
+                    st.rerun()
+                else:
+                    st.info(plan["message"])
+        with st.container():
+            st.caption("保護者向け：復習の予定")
+            if st.button("復習の予定をみる", key="math_review_forecast"):
+                try:
+                    forecast = review_forecast(load_math_review_history(st.session_state.user_id),
+                                               st.session_state.user_id, "math", limit=limit)
+                except (sqlite3.Error, OSError, ValueError, KeyError, TypeError):
+                    st.error("復習の予定を読み込めませんでした。もういちど押してください。")
+                else:
+                    st.write(f"きょう：{forecast['today_count']}問 ／ あした：{forecast['tomorrow_count']}問")
+                    st.caption("きょうの復習は1日5問まで。きょうの数は回答済みを除いた残りです。基本問題の補充は含みません。")
+    with st.expander("がんばりの きろく・ごほうび"):
+        if st.button(plain_label("学習履歴", st.session_state.user_id), key="history_settings", use_container_width=True):
+            open_history("settings")
+        if st.button(plain_label("学習レポート", st.session_state.user_id), key="report_settings", use_container_width=True):
+            open_report("settings")
+        if st.button(plain_label("学習カレンダー・ごほうび", st.session_state.user_id), key="calendar_settings", use_container_width=True):
+            open_calendar("settings")
     if st.button("なまえを かえる"):
         st.session_state.screen = "user"
         st.rerun()
@@ -692,7 +704,8 @@ def check_access():
     st.stop()
 
 
-st.title("📚 さんすう・こくご れんしゅう")
+apply_theme()
+brand()
 check_access()
 try:
     init_db()
@@ -714,35 +727,20 @@ if is_test_mode(st.session_state):
         st.rerun()
 
 if st.session_state.screen in ("settings", "jp_settings"):
-    math_tab, japanese_tab = st.columns(2)
-    if math_tab.button("🔢 さんすう", key="subject_math", disabled=st.session_state.screen == "settings",
-                       use_container_width=True):
-        st.session_state.screen = "settings"
-        st.rerun()
-    if japanese_tab.button("📖 こくご", key="subject_japanese", disabled=st.session_state.screen == "jp_settings",
+    with st.container(key="subject_navigation"):
+        math_tab, japanese_tab = st.columns(2)
+        if math_tab.button("🔢 さんすう", key="subject_math", disabled=st.session_state.screen == "settings",
                            use_container_width=True):
-        st.session_state.screen = "jp_settings"
-        st.rerun()
-
-if st.session_state.screen in ("settings", "jp_settings", "report", "jp_analysis", "results", "jp_results"):
-    if st.button("週間レポート・学習目標・記録の書き出し（保護者向け）", key="parent_dashboard_open", use_container_width=True):
-        st.session_state.parent_dashboard_return = st.session_state.screen
-        st.session_state.screen = "parent_dashboard"
-        st.rerun()
-    if st.button("共通レポート・教科横断分析（保護者向け）", key="cross_open", use_container_width=True):
-        st.session_state.cross_return = st.session_state.screen
-        st.session_state.screen = "cross_report"
-        st.rerun()
+            st.session_state.screen = "settings"
+            st.rerun()
+        if japanese_tab.button("📖 こくご", key="subject_japanese", disabled=st.session_state.screen == "jp_settings",
+                               use_container_width=True):
+            st.session_state.screen = "jp_settings"
+            st.rerun()
 
 from cross_subject_ui import report_screen as cross_report_screen
 from display_settings_ui import settings_screen as display_settings_screen
 from parent_features_ui import render_dashboard
-
-if st.session_state.screen in ("settings", "jp_settings"):
-    if st.button("漢字・読み方設定（保護者向け・両教科共通）", key="display_open", use_container_width=True):
-        st.session_state.display_return = st.session_state.screen
-        st.session_state.screen = "display_settings"
-        st.rerun()
 
 screens = {"user": user_screen, "settings": settings_screen,
            "practice": practice_screen, "results": results_screen, "history": history_screen,
@@ -752,3 +750,19 @@ if st.session_state.screen.startswith("jp_"):
     from japanese_ui import SCREENS
     screens.update(SCREENS)
 screens[st.session_state.screen]()
+
+if st.session_state.screen in ("settings", "jp_settings", "report", "jp_analysis", "results", "jp_results"):
+    with st.expander("おうちの人へ・レポートと設定"):
+        if st.button("週間レポート・学習目標・記録の書き出し（保護者向け）", key="parent_dashboard_open", use_container_width=True):
+            st.session_state.parent_dashboard_return = st.session_state.screen
+            st.session_state.screen = "parent_dashboard"
+            st.rerun()
+        if st.button("共通レポート・教科横断分析（保護者向け）", key="cross_open", use_container_width=True):
+            st.session_state.cross_return = st.session_state.screen
+            st.session_state.screen = "cross_report"
+            st.rerun()
+        if st.session_state.screen in ("settings", "jp_settings"):
+            if st.button("漢字・読み方設定（保護者向け・両教科共通）", key="display_open", use_container_width=True):
+                st.session_state.display_return = st.session_state.screen
+                st.session_state.screen = "display_settings"
+                st.rerun()
