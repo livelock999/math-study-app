@@ -12,6 +12,7 @@ import learning_extensions as store
 import school_scope as school
 from parent_insights import weekly_report, error_analysis, csv_export, review_forecast
 from practice_mode import is_test_mode
+from history_backup_ui import render_backup
 
 
 def rate(value):
@@ -75,6 +76,7 @@ def render_dashboard():
         st.download_button("両教科の履歴をCSVで保存", data=csv_export(math, japanese, user_id, now=now),
                            file_name=f"learning-{user_id}-{now:%Y%m%d}.csv", mime="text/csv",
                            key="parent_history_csv", on_click="ignore", use_container_width=True)
+        render_backup(user_id, math, japanese, now)
         _show_feedback(user_id)
 
 

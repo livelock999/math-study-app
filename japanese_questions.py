@@ -1,4 +1,4 @@
-"""小1向けの固定80問。生成AIを使わず、問題と分析属性を一緒に管理します。"""
+"""小1向けの固定教材。生成AIを使わず、問題と分析属性を一緒に管理します。"""
 
 CATEGORIES = {
     "words": "ことば", "sentence": "1ぶんを よむ", "information": "だれ・なに・どこ",
@@ -10,7 +10,7 @@ TAG_LABELS = {
     "subject": "主語", "predicate": "述語", "particle": "助詞", "sentence_understanding": "文意理解",
     "information": "情報抽出", "sequence": "時系列", "context": "文脈理解", "grammar": "文法",
     "reference": "指示語", "inference": "推測", "connection": "接続関係", "word_order": "語順",
-    "sentence_creation": "文生成",
+    "sentence_creation": "文生成", "reason": "理由を読む", "emotion": "気持ちを読む",
 }
 QUESTION_LABELS = {"who": "だれ", "what": "なに", "where": "どこ", "when": "いつ",
                    "action": "どうした", "why": "なぜ", "how": "どんな", "order": "順番",
@@ -188,3 +188,5 @@ def build_questions():
 QUESTIONS = build_questions()
 from particles import QUESTIONS as PARTICLE_QUESTIONS
 QUESTIONS += PARTICLE_QUESTIONS
+from reading_materials import QUESTIONS as READING_QUESTIONS
+QUESTIONS += READING_QUESTIONS

@@ -124,6 +124,8 @@ def settings():
         with st.expander("もんだいを えらぶ・せってい"):
             categories = {"mix": "おまかせ", **CATEGORIES}
             category = st.radio("れんしゅうする こと", list(categories), format_func=categories.get, key="jp_category")
+            if category == "passage":
+                st.caption("「なぜ？」や「どんな きもち？」を、おはなしの ことばから かんがえよう。こたえた あとに てがかりを みられるよ。")
             particle_level = None
             if category == "particles":
                 from particles import LEVELS

@@ -48,7 +48,7 @@ class ParentDashboardTests(unittest.TestCase):
         self.submit("学習目標を保存")
         self.save.assert_called_once_with("user_001", 4, 6)
         self.assertTrue(any("学習目標を保存" in item.value for item in self.app.success))
-        self.assertEqual(len(self.app.get("download_button")), 1)
+        self.assertEqual(len(self.app.get("download_button")), 2)
         self.click("parent_dashboard_back")
         self.assertEqual(self.app.session_state.screen, "settings")
 
@@ -89,7 +89,7 @@ class ParentDashboardTests(unittest.TestCase):
         self.open()
         self.assertTrue(self.app.warning)
         self.assertTrue(next(button for button in self.app.button if button.label == "学習目標を保存").disabled)
-        self.assertEqual(len(self.app.get("download_button")), 1)
+        self.assertEqual(len(self.app.get("download_button")), 2)
         self.save.assert_not_called()
 
 
