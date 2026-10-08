@@ -667,7 +667,8 @@ class AppFlowTests(unittest.TestCase):
         self.app.button(key="report_settings").click().run()
         self.assertEqual(len(self.app.exception), 0)
         self.assertEqual(self.app.metric[0].value, "500問")
-        self.assertEqual(self.read_mock.call_count, 5)
+        # 復習を別枠で集計するため全ページを取得し、通常の評価は500回答を保つ。
+        self.assertEqual(self.read_mock.call_count, 6)
         self.assertTrue(any("直近500回答" in caption.value for caption in self.app.caption))
 
     def test_history_user_switch_and_page_navigation(self):

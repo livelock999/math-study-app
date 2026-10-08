@@ -50,8 +50,16 @@ def report_screen():
                       "読み方確認率": rate(data["initial"]["reading_help_rate"]),
                       "再練習回答数": data["retry"]["count"], "再練習正答率": rate(data["retry"]["rate"])})
     st.dataframe(table, hide_index=True, width="stretch")
-    st.caption("算数の初回は通常練習、国語の初回は回答回数1（苦手練習を含む）です。"
+    st.caption("算数の初回は通常練習、国語の初回は回答回数1（苦手練習を含む）です。復習は初回評価から除外します。"
                "教科ごとに問題・難易度が違うため、正答率は教科間の能力差を示しません。")
+    with st.expander("保護者向け：復習の成果（初回評価とは別）"):
+        review_table = []
+        for subject, title in (("math", "算数"), ("japanese", "国語")):
+            for key, label in (("review", "きょうの復習"), ("review_retry", "復習の再練習")):
+                result = report["subjects"][subject][key]
+                review_table.append({"教科": title, "練習": label, "回答数": result["count"],
+                                     "正答率": rate(result["rate"]), "ヒント使用率": rate(result["hint_rate"])})
+        st.dataframe(review_table, hide_index=True, width="stretch")
     st.write("**計算・文章題・国語読解を並べて見る**")
     st.dataframe([{"項目": g["label"], "初回評価数": g["count"], "正答率": rate(g["rate"]),
                    "ヒント使用率": rate(g["hint_rate"]),

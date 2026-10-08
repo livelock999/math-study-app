@@ -76,7 +76,8 @@ QUESTIONS = build_questions()
 
 
 def analyze(records):
-    rows = [r for r in records if r.get("category") == "particles"]
+    rows = [r for r in records if r.get("category") == "particles"
+            and r["selection_type"] not in ("review", "review_retry")]
     # 再送を除外し、初回回答だけから混同頻度・初回正答率を作ります。
     unique = {r["attempt_id"]: r for r in rows}
     rows = list(unique.values())
@@ -95,7 +96,8 @@ def analyze(records):
         return result
 
     errors = Counter(r["confusion_pair"] for r in initial if not r["correct"] and r.get("confusion_pair"))
-    directions = Counter((r["target_particle"], r["selected_answer_text"]) for r in initial if not r["correct"])
+    directions = Counter((r["target_particle"], r["selected_answer_text"]) for r in initial
+                         if not r["correct"] and not r.get("dont_know_used"))
     return {"count": len(initial), "total": len(rows), "rate": mean(r["correct"] for r in initial) if initial else None,
             "particles": group("target_particle", {p: p for p in PARTICLES}),
             "roles": group("semantic_role", ROLES), "levels": group("level", LEVELS),
@@ -106,6 +108,7 @@ def analyze(records):
 
 def recommended(records, count=5, level=None):
     """混同→助詞→意味役割→最近の誤答→未出題。比較する2問は隣に出します。"""
+    records = [r for r in records if r["selection_type"] not in ("review", "review_retry")]
     report = analyze(records)
     initial = [r for r in records if r.get("category") == "particles" and r["attempt_count"] == 1]
     seen = {r["question_id"] for r in initial}

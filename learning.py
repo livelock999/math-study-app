@@ -77,7 +77,7 @@ COLUMNS = {
     "answer_is_10": "INTEGER", "operand_contains_10": "INTEGER",
     "near_10": "INTEGER", "commutative_pair": "TEXT",
     "round_size": "INTEGER", "round_completed": "INTEGER",
-    "user_equation": "TEXT", "reading_help_used": "INTEGER",
+    "user_equation": "TEXT", "reading_help_used": "INTEGER", "hint_level": "INTEGER",
 }
 
 
@@ -178,7 +178,7 @@ def init_db(path=None):
         definitions = ", ".join(f'"{name}" {kind}' for name, kind in COLUMNS.items())
         connection.execute(f"CREATE TABLE IF NOT EXISTS attempts ({definitions})")
         existing = {row[1] for row in connection.execute("PRAGMA table_info(attempts)")}
-        for name in ("round_size", "round_completed", "user_equation", "reading_help_used"):
+        for name in ("round_size", "round_completed", "user_equation", "reading_help_used", "hint_level", "dont_know_used"):
             if name not in existing:
                 connection.execute(f"ALTER TABLE attempts ADD COLUMN {name} {COLUMNS[name]}")
         connection.execute("CREATE INDEX IF NOT EXISTS user_sessions ON attempts(user_id, session_id)")
@@ -186,18 +186,22 @@ def init_db(path=None):
 
 def make_attempt(problem, user_id, session_id, order, selection, answer, seconds, count,
                  round_size=None, selected_operation=None, equation_left=None, equation_right=None, hint_used=False,
-                 reading_help_used=False):
-    if type(hint_used) is not bool or type(reading_help_used) is not bool:
+                 reading_help_used=False, hint_level=0, dont_know_used=False):
+    if selection not in ("normal", "weak_area", "retry", "review", "review_retry"):
+        raise ValueError("練習の種類が不正です。")
+    if (type(hint_used) is not bool or type(reading_help_used) is not bool
+            or type(dont_know_used) is not bool or type(hint_level) is not int or not 0 <= hint_level <= 3):
         raise ValueError("ヒントの使用状態が不正です。")
+    hint_used = hint_used or hint_level > 0
     if round_size is not None and (type(round_size) is not int or round_size < 1 or not 1 <= order <= round_size):
         raise ValueError("セットの問題数または出題順が不正です")
     is_word = problem["problem_format"] == "word_problem"
-    if is_word and selected_operation not in ("addition", "subtraction"):
+    if is_word and not dont_know_used and selected_operation not in ("addition", "subtraction"):
         raise ValueError("文章題では、たす・ひくを選んでください。")
     operation_correct = selected_operation == problem["operation"] if is_word else None
     equation_correct, user_equation = None, None
     left, right = problem["left_operand"], problem["right_operand"]
-    if equation_left is not None or equation_right is not None:
+    if not dont_know_used and (equation_left is not None or equation_right is not None):
         if (not is_word or type(equation_left) is not int or type(equation_right) is not int
                 or not 0 <= equation_left <= 99 or not 0 <= equation_right <= 99):
             raise ValueError("式の2つの数には0〜99の整数を入れてください。")
@@ -213,6 +217,11 @@ def make_attempt(problem, user_id, session_id, order, selection, answer, seconds
         overall_correct = operation_correct and calculation_correct is True
         if user_equation is not None:
             overall_correct = overall_correct and equation_correct is True
+    if dont_know_used:
+        # 選べなかったことを、演算の選び間違いや計算ミスとは区別します。
+        answer = None
+        overall_correct = False
+        operation_correct = equation_correct = calculation_correct = None
     record = dict(problem)
     record.update(
         attempt_id=new_id("attempt"), user_id=user_id, session_id=session_id,
@@ -223,18 +232,25 @@ def make_attempt(problem, user_id, session_id, order, selection, answer, seconds
         user_equation=user_equation,
         calculation_correct=calculation_correct,
         response_time_sec=round(max(0, seconds), 3), attempt_count=count,
-        hint_used=hint_used, reading_help_used=reading_help_used, dont_know_used=False, retry_flag=selection == "retry",
+        hint_used=hint_used, hint_level=hint_level, reading_help_used=reading_help_used,
+        dont_know_used=dont_know_used, retry_flag=selection in ("retry", "review_retry"),
         round_size=round_size, round_completed=(order == round_size) if round_size is not None else None,
     )
     return record
 
 
-def save_attempt(record, path=None):
+def save_attempt(record, path=None, test_mode=False):
     """回答ごとにコミット。同じ attempt_id の再送だけ重複を防ぎます。"""
+    if type(test_mode) is not bool:
+        raise ValueError("テスト状態が不正です。")
+    if test_mode:
+        return
     # 更新前から未保存の回答がある場合、この追加項目は未評価として保存します。
     record = dict(record)
     record.setdefault("user_equation", None)
     record.setdefault("reading_help_used", None)
+    record.setdefault("hint_level", None)
+    record.setdefault("dont_know_used", None)
     names = list(COLUMNS)
     if path is None:
         config = get_supabase_config()
@@ -293,6 +309,11 @@ def read_attempts(user_id, page=0, page_size=50, path=None, start_at=None, end_a
                     if not 200 <= response.status < 300:
                         raise OSError("履歴を読み込めませんでした。")
                     rows = json.loads(response.read().decode("utf-8"))
+                # 追加SQLの適用前・移行前の履歴でも、段階不明を0と誤認しません。
+                if isinstance(rows, list):
+                    for row in rows:
+                        if isinstance(row, dict):
+                            row.setdefault("hint_level", None)
                 if (not isinstance(rows, list) or len(rows) > limit
                         or any(not isinstance(row, dict) or row.get("user_id") != user_id
                                or not set(COLUMNS).issubset(row) for row in rows)):

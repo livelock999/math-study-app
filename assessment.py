@@ -81,11 +81,15 @@ def assess(records):
     if target and target["hint_support"]:
         message += " ヒントが考え方の支えになっています。必要なときはヒントを使い、慣れたら同じ種類を自力でも試しましょう。"
     return {"overall": summarize(normal), "retry": summarize(retries), "groups": groups,
+            "review": summarize([r for r in calculations if r["selection_type"] == "review"]),
+            "review_retry": summarize([r for r in calculations if r["selection_type"] == "review_retry"]),
             "strengths": strengths, "message": message,
             "target": target["key"] if target else None,
             "suggested_limit": max((row["number_range"] for row in normal), default=10),
             "word_normal": summarize_words([row for row in words if row["selection_type"] == "normal"]),
-            "word_retry": summarize_words([row for row in words if row["selection_type"] == "retry"])}
+            "word_retry": summarize_words([row for row in words if row["selection_type"] == "retry"]),
+            "word_review": summarize_words([row for row in words if row["selection_type"] == "review"]),
+            "word_review_retry": summarize_words([row for row in words if row["selection_type"] == "review_retry"])}
 
 
 def summarize_words(records):

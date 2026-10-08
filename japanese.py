@@ -52,23 +52,29 @@ def answer_text(question, answer):
 
 
 def make_record(question, user_id, session_id, order, selection, answer, seconds, attempt_count,
-                chain_id, hint_used=False, reading_mode="self_read", first_try_correct=None, reading_help_used=False):
-    if user_id not in learning.USERS or not validate_answer(question, answer):
+                chain_id, hint_used=False, reading_mode="self_read", first_try_correct=None, reading_help_used=False,
+                hint_level=0, dont_know_used=False):
+    if user_id not in learning.USERS or (not dont_know_used and not validate_answer(question, answer)):
         raise ValueError("学習者または回答が不正です。")
     if (type(seconds) not in (int, float) or not math.isfinite(seconds) or seconds < 0
             or type(attempt_count) is not int or attempt_count < 1 or type(hint_used) is not bool or type(reading_help_used) is not bool
-            or selection not in ("normal", "weak_area", "retry") or reading_mode not in ("self_read", "audio")):
+            or type(dont_know_used) is not bool or type(hint_level) is not int or not 0 <= hint_level <= 3
+            or selection not in ("normal", "weak_area", "retry", "review", "review_retry") or reading_mode not in ("self_read", "audio")):
         raise ValueError("回答の記録が不正です。")
-    correct = answer == question["answer"]
+    hint_used = hint_used or hint_level > 0
+    if dont_know_used:
+        answer = None
+    correct = not dont_know_used and answer == question["answer"]
     error_key = "ordering" if question["problem_format"] == "ordering" else str(answer)
     record = {**question, "attempt_id": learning.new_id("jp_attempt"), "user_id": user_id,
             "session_id": session_id, "chain_id": chain_id, "question_order": order,
             "selection_type": selection, "selected_answer": answer,
-            "selected_answer_text": answer_text(question, answer), "correct": correct,
+            "selected_answer_text": "わからない" if dont_know_used else answer_text(question, answer), "correct": correct,
             "datetime": datetime.now(JST).isoformat(), "response_time_sec": round(seconds, 3),
-            "attempt_count": attempt_count, "hint_used": hint_used, "reading_help_used": reading_help_used, "reading_mode": reading_mode,
-            "retry_flag": selection == "retry", "final_correct": correct,
-            "error_cause_tags": [] if correct else question["error_tags"].get(error_key, []),
+            "attempt_count": attempt_count, "hint_used": hint_used, "hint_level": hint_level,
+            "dont_know_used": dont_know_used, "reading_help_used": reading_help_used, "reading_mode": reading_mode,
+            "retry_flag": selection in ("retry", "review_retry"), "final_correct": correct,
+            "error_cause_tags": [] if correct or dont_know_used else question["error_tags"].get(error_key, []),
             "review_due_at": None if correct else (datetime.now(JST) + timedelta(days=1)).isoformat()}
     if question["category"] == "particles":
         from particles import confusion_pair
@@ -79,7 +85,7 @@ def make_record(question, user_id, session_id, order, selection, answer, seconds
                       correct_answer=question["correct_answer"], is_correct=correct,
                       first_try_correct=correct if attempt_count == 1 else first_try_correct,
                       response_time=record["response_time_sec"], retry_count=attempt_count - 1,
-                      confusion_pair=confusion_pair(question["correct_answer"], record["selected_answer_text"]),
+                      confusion_pair=None if dont_know_used else confusion_pair(question["correct_answer"], record["selected_answer_text"]),
                       expected_confusion_pair=question["confusion_pair"])
     return record
 
@@ -98,7 +104,11 @@ def init_db(path=None):
         db.execute("CREATE INDEX IF NOT EXISTS japanese_user_date ON japanese_attempts(user_id, datetime)")
 
 
-def save_record(record, path=None):
+def save_record(record, path=None, test_mode=False):
+    if type(test_mode) is not bool:
+        raise ValueError("テスト状態が不正です。")
+    if test_mode:
+        return
     payload = json.dumps(record, ensure_ascii=False, allow_nan=False)
     if path is None:
         config = learning.get_supabase_config()
@@ -174,6 +184,10 @@ def read_all(user_id, path=None):
 
 
 def metrics(records):
+    # 復習の新しい chain は通常学習の初回・再回答・最終成果に混ぜません。
+    review = [r for r in records if r["selection_type"] == "review"]
+    review_retry = [r for r in records if r["selection_type"] == "review_retry"]
+    records = [r for r in records if r["selection_type"] not in ("review", "review_retry")]
     initial = [r for r in records if r["attempt_count"] == 1]
     chains = {}
     for row in sorted(records, key=lambda r: (r["attempt_count"], r["datetime"], r["attempt_id"])):
@@ -189,12 +203,22 @@ def metrics(records):
             **summarize_hints(initial, "correct"),
             "retry_count": len(retried), "retry_success": sum(rows[-1]["correct"] for rows in retried),
             "eventual_correct": sum(rows[-1]["correct"] for rows in chains.values()),
-            "chains": len(chains), "error_counts": dict(error_counts)}
+            "chains": len(chains), "error_counts": dict(error_counts),
+            "review": review_metrics(review), "review_retry": review_metrics(review_retry)}
+
+
+def review_metrics(records):
+    """通常の初回評価と独立した、復習回答の成果。"""
+    correct = sum(bool(r["correct"]) for r in records)
+    return {"count": len(records), "correct": correct,
+            "rate": correct / len(records) if records else None,
+            **summarize_hints(records, "correct")}
 
 
 def analyze(records, now=None, reading_mode="self_read"):
     now = now or datetime.now(JST)
-    selected = [r for r in records if r["reading_mode"] == reading_mode]
+    selected = [r for r in records if r["reading_mode"] == reading_mode
+                and r["selection_type"] not in ("review", "review_retry")]
     summary = metrics(selected)
     correct_times = [r["response_time_sec"] for r in selected if r["attempt_count"] == 1 and r["correct"]]
     baseline = mean(correct_times) if correct_times else None
@@ -246,4 +270,8 @@ def analyze(records, now=None, reading_mode="self_read"):
     weak = [g for g in groups["category"] if g["status"] in ("× 苦手", "△ 練習中")]
     weak.sort(key=lambda g: (g["rate"], -(g["hint_rate"] or 0)))
     return {"summary": summary, "week": metrics(week), "week_start": start, **groups,
-            "weak_categories": [g["key"] for g in weak], "reading_mode": reading_mode}
+            "weak_categories": [g["key"] for g in weak], "reading_mode": reading_mode,
+            "review": review_metrics([r for r in records if r["reading_mode"] == reading_mode
+                                      and r["selection_type"] == "review"]),
+            "review_retry": review_metrics([r for r in records if r["reading_mode"] == reading_mode
+                                            and r["selection_type"] == "review_retry"])}

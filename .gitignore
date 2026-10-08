@@ -1,4 +1,5 @@
 .venv/
+.qa/
 .uv-cache/
 __pycache__/
 data/
