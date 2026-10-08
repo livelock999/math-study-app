@@ -16,6 +16,8 @@ from practice_mode import is_test_mode, is_test_round, write_learning_answer
 from daily_review import plan_japanese
 from parent_insights import adaptive_japanese, japanese_hint_steps, review_forecast
 from ui_theme import card_heading
+import adaptive_difficulty as difficulty
+import school_scope as school
 
 keyboard = components.declare_component("japanese_keyboard", path=str(Path(__file__).parent / "japanese_keyboard"))
 
@@ -40,7 +42,7 @@ def initialize():
         st.stop()
 
 
-def start(questions, selection="normal", review_reasons=None):
+def start(questions, selection="normal", review_reasons=None, difficulty_plan=None):
     if selection not in ("retry", "review_retry"):
         st.session_state.jp_counts = {}
         st.session_state.jp_first_correct = {}
@@ -50,7 +52,7 @@ def start(questions, selection="normal", review_reasons=None):
                                  "pending": None, "user_id": st.session_state.user_id,
                                  "paused": False, "resume_revision": 0, "draft": {},
                                  "test_mode": is_test_mode(st.session_state),
-                                 "review_reasons": dict(review_reasons or {})}
+                                 "review_reasons": dict(review_reasons or {}), "difficulty_plan": difficulty_plan}
     goto("jp_practice")
 
 
@@ -130,7 +132,23 @@ def settings():
             count = st.radio("もんだいの かず", [5, 10], index=1, format_func=lambda n: f"{n}もん",
                              horizontal=True, key="jp_count")
         st.caption(f"1かい {count}もん。あせらず やってみよう。")
-        if st.button(plain_label("こくご スタート", st.session_state.user_id), key="jp_start", type="primary", use_container_width=True):
+        if st.button("おまかせで れんしゅう", key="jp_adaptive_start", type="primary", use_container_width=True):
+            records = load()
+            if records is not None:
+                try:
+                    scope = school.active_scope(st.session_state.user_id, st.session_state)
+                    plan = school.plan_japanese(records, st.session_state.user_id, scope, category, count, particle_level)
+                except (sqlite3.Error, OSError):
+                    st.error("学校の範囲を読み込めませんでした。接続と追加SQLを確認して、もういちど押してください。")
+                except (ValueError, KeyError, TypeError):
+                    st.error("おまかせの履歴を確認できませんでした。設定と履歴を確認してください。")
+                else:
+                    if plan["items"]:
+                        start(plan["items"], difficulty_plan=plan)
+                    else:
+                        st.info(plan["message"])
+        st.caption("こたえや ヒントに あわせて、つぎの セットの むずかしさを すこしずつ。条件を自分で決めるときは下のスタートを使えます。")
+        if st.button(plain_label("こくご スタート", st.session_state.user_id), key="jp_start", use_container_width=True):
             start(jp.choose_questions(category, count, particle_level=particle_level))
     with review_card:
         card_heading("🌱", "きょうの ふくしゅう", "こくごを 5もん。おぼえた ことばを、もういちど。")
@@ -138,7 +156,11 @@ def settings():
             records = load()
             if records is not None:
                 try:
-                    plan = plan_japanese(records, st.session_state.user_id, particle_level=particle_level, count=5)
+                    scope = school.active_scope(st.session_state.user_id, st.session_state)
+                    pool = school.review_pool(records, st.session_state.user_id, scope, "japanese")
+                    plan = plan_japanese(records, st.session_state.user_id, particle_level=particle_level, count=5, candidate_pool=pool)
+                except (sqlite3.Error, OSError):
+                    st.error("学校の範囲を読み込めませんでした。接続と追加SQLを確認してください。")
                 except (ValueError, KeyError, TypeError):
                     st.error("復習の履歴を確認できませんでした。設定と履歴を確認してください。")
                 else:
@@ -165,7 +187,12 @@ def settings():
                 records = load()
                 if records is not None:
                     try:
-                        forecast = review_forecast(records, st.session_state.user_id, "japanese", particle_level=particle_level)
+                        scope = school.active_scope(st.session_state.user_id, st.session_state)
+                        pool = school.review_pool(records, st.session_state.user_id, scope, "japanese")
+                        forecast = review_forecast(records, st.session_state.user_id, "japanese", particle_level=particle_level,
+                                                   candidate_pool=pool)
+                    except (sqlite3.Error, OSError):
+                        st.error("学校の範囲を読み込めませんでした。接続と追加SQLを確認してください。")
                     except (ValueError, KeyError, TypeError):
                         st.error("復習の予定を確認できませんでした。設定と履歴を確認してください。")
                     else:
@@ -237,6 +264,7 @@ def save_pending(state):
 
 def practice():
     state = st.session_state.jp_round
+    difficulty.show_reason(state.get("difficulty_plan"), "japanese")
     index = state["index"]
     question = state["questions"][index]
     st.caption(f"{learning.USERS[st.session_state.user_id]} ／ こくご")
@@ -319,6 +347,7 @@ def practice():
 
 def results():
     state = st.session_state.jp_round
+    difficulty.show_reason(state.get("difficulty_plan"), "japanese")
     correct = sum(r["correct"] for r in state["answers"])
     st.subheader("こくごの れんしゅう おわり！")
     if state["selection"] in ("review", "review_retry"):

@@ -9,6 +9,7 @@ from activity import JST
 from cross_subject import load_records
 from learning import USERS
 import learning_extensions as store
+import school_scope as school
 from parent_insights import weekly_report, error_analysis, csv_export, review_forecast
 from practice_mode import is_test_mode
 
@@ -49,10 +50,17 @@ def render_dashboard():
         st.write("**復習の見通し**")
         forecasts = []
         for subject, title, rows in (("math", "算数", math), ("japanese", "国語", japanese)):
-            prediction = review_forecast(rows, user_id, subject, now=now,
-                                         limit=st.session_state.get("math_review_limit", 10),
-                                         particle_level=(st.session_state.get("jp_particle_level", 1)
-                                                         if st.session_state.get("jp_category") == "particles" else None))
+            try:
+                scope = school.active_scope(user_id, st.session_state)
+                pool = school.review_pool(rows, user_id, scope, subject, now=now)
+                prediction = review_forecast(rows, user_id, subject, now=now,
+                                             limit=st.session_state.get("math_review_limit", 10),
+                                             particle_level=(st.session_state.get("jp_particle_level", 1)
+                                                             if st.session_state.get("jp_category") == "particles" else None),
+                                             candidate_pool=pool)
+            except (sqlite3.Error, OSError, ValueError, KeyError, TypeError):
+                st.warning(f"{title}の学校範囲と復習予定を確認できませんでした。接続と追加SQLを確認してください。")
+                continue
             forecasts.append({"教科": title, "きょうの対象": prediction["today_total"],
                               "きょう取り組む目安": prediction["today_count"],
                               "あした新しく対象": prediction["tomorrow_total"],

@@ -20,12 +20,14 @@ from practice_mode import is_test_mode, is_test_round, switch_mode, write_learni
 from daily_review import plan_math
 from parent_insights import adaptive_math, math_hint_steps, review_forecast
 from ui_theme import apply_theme, brand, card_heading
+import adaptive_difficulty as difficulty
+import school_scope as school
 
 st.set_page_config(page_title="さんすう・こくご れんしゅう", page_icon="📚", layout="centered")
 keyboard = components.declare_component("math_keyboard", path=str(Path(__file__).parent / "keyboard"))
 
 
-def start_round(problems, selection_type, review_reasons=None):
+def start_round(problems, selection_type, review_reasons=None, difficulty_plan=None):
     """再練習も独立したセット。回答回数だけは前のセットから引き継ぎます。"""
     if selection_type == "normal":
         st.session_state.practice_count = len(problems)
@@ -37,6 +39,7 @@ def start_round(problems, selection_type, review_reasons=None):
         "user_id": st.session_state.user_id, "suspended": False, "drafts": {}, "interaction_revision": {},
         "test_mode": is_test_mode(st.session_state),
         "review_reasons": dict(review_reasons or {}),
+        "difficulty_plan": difficulty_plan,
     }
     st.session_state.screen = "practice"
 
@@ -152,7 +155,22 @@ def settings_screen():
             if error:
                 st.info(error)
         st.caption(f"1かい {count}もん。まちがえた もんだいは あとで れんしゅうできるよ。")
-        if st.button(plain_label("れんしゅう スタート", st.session_state.user_id), type="primary", use_container_width=True, disabled=bool(error)):
+        if st.button("おまかせで れんしゅう", key="math_adaptive_start", type="primary", use_container_width=True):
+            try:
+                scope = school.active_scope(st.session_state.user_id, st.session_state)
+                plan = school.plan_math(load_math_review_history(st.session_state.user_id),
+                                        st.session_state.user_id, scope, mode, limit, count, special, problem_format)
+            except (sqlite3.Error, OSError, ValueError, KeyError, TypeError):
+                st.error("おまかせの履歴・学校の範囲を読み込めませんでした。接続と追加SQLを確認して、もういちど押してください。")
+            else:
+                if plan["items"]:
+                    st.session_state.attempt_counts = {}
+                    start_round(plan["items"], "normal", difficulty_plan=plan)
+                    st.rerun()
+                else:
+                    st.info(plan["message"])
+        st.caption("こたえや ヒントに あわせて、つぎの セットの むずかしさを すこしずつ。条件を自分で決めるときは下のスタートを使えます。")
+        if st.button(plain_label("れんしゅう スタート", st.session_state.user_id), use_container_width=True, disabled=bool(error)):
             st.session_state.attempt_counts = {}
             start_round(generate_problems(mode, limit, count, special, problem_format), "normal")
             st.rerun()
@@ -161,9 +179,11 @@ def settings_screen():
         if st.button("きょうの ふくしゅう", key="math_daily_review", use_container_width=True):
             try:
                 records = load_math_review_history(st.session_state.user_id)
-                plan = plan_math(records, st.session_state.user_id, limit=limit, count=5)
+                scope = school.active_scope(st.session_state.user_id, st.session_state)
+                pool = school.review_pool(records, st.session_state.user_id, scope, "math")
+                plan = plan_math(records, st.session_state.user_id, limit=limit, count=5, candidate_pool=pool)
             except (sqlite3.Error, OSError, ValueError, KeyError, TypeError):
-                st.error("復習の履歴を読み込めませんでした。接続を確認して、もういちど押してください。")
+                st.error("復習の履歴・学校の範囲を読み込めませんでした。接続と追加SQLを確認して、もういちど押してください。")
             else:
                 if plan["items"]:
                     st.session_state.attempt_counts = {}
@@ -189,8 +209,10 @@ def settings_screen():
             st.caption("保護者向け：復習の予定")
             if st.button("復習の予定をみる", key="math_review_forecast"):
                 try:
-                    forecast = review_forecast(load_math_review_history(st.session_state.user_id),
-                                               st.session_state.user_id, "math", limit=limit)
+                    records = load_math_review_history(st.session_state.user_id)
+                    scope = school.active_scope(st.session_state.user_id, st.session_state)
+                    pool = school.review_pool(records, st.session_state.user_id, scope, "math")
+                    forecast = review_forecast(records, st.session_state.user_id, "math", limit=limit, candidate_pool=pool)
                 except (sqlite3.Error, OSError, ValueError, KeyError, TypeError):
                     st.error("復習の予定を読み込めませんでした。もういちど押してください。")
                 else:
@@ -238,6 +260,7 @@ def remember_practice_draft(state, index, event):
 
 def practice_screen():
     state = st.session_state.round
+    difficulty.show_reason(state.get("difficulty_plan"), "math")
     state.setdefault("user_id", st.session_state.user_id)
     if state["user_id"] != st.session_state.user_id:
         st.session_state.screen = "settings"
@@ -384,6 +407,7 @@ def practice_screen():
 
 def results_screen():
     state = st.session_state.round
+    difficulty.show_reason(state.get("difficulty_plan"), "math")
     correct = sum(record["is_correct"] for record in state["answers"])
     total = len(state["answers"])
     st.subheader("れんしゅう おわり！")
@@ -741,11 +765,13 @@ if st.session_state.screen in ("settings", "jp_settings"):
 from cross_subject_ui import report_screen as cross_report_screen
 from display_settings_ui import settings_screen as display_settings_screen
 from parent_features_ui import render_dashboard
+from school_scope_ui import settings_screen as school_settings_screen
 
 screens = {"user": user_screen, "settings": settings_screen,
            "practice": practice_screen, "results": results_screen, "history": history_screen,
            "report": report_screen, "calendar": calendar_screen, "cross_report": cross_report_screen,
-           "display_settings": display_settings_screen, "parent_dashboard": render_dashboard}
+           "display_settings": display_settings_screen, "parent_dashboard": render_dashboard,
+           "school_settings": school_settings_screen}
 if st.session_state.screen.startswith("jp_"):
     from japanese_ui import SCREENS
     screens.update(SCREENS)
@@ -762,6 +788,10 @@ if st.session_state.screen in ("settings", "jp_settings", "report", "jp_analysis
             st.session_state.screen = "cross_report"
             st.rerun()
         if st.session_state.screen in ("settings", "jp_settings"):
+            if st.button("学校で習っている範囲（保護者向け）", key="school_scope_open", use_container_width=True):
+                st.session_state.school_scope_return = st.session_state.screen
+                st.session_state.screen = "school_settings"
+                st.rerun()
             if st.button("漢字・読み方設定（保護者向け・両教科共通）", key="display_open", use_container_width=True):
                 st.session_state.display_return = st.session_state.screen
                 st.session_state.screen = "display_settings"
