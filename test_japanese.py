@@ -32,10 +32,10 @@ class JapaneseQuestionsTests(unittest.TestCase):
                                2, 1, "chain", reading_help_used=invalid)
 
     def test_all_questions_have_valid_metadata_and_answers(self):
-        self.assertEqual(len(QUESTIONS), 120)
-        self.assertEqual(len({q["question_id"] for q in QUESTIONS}), 120)
+        self.assertEqual(len(QUESTIONS), 136)
+        self.assertEqual(len({q["question_id"] for q in QUESTIONS}), 136)
         self.assertEqual(Counter(q["category"] for q in QUESTIONS),
-                         {"words": 12, "sentence": 12, "information": 18, "sequence": 10, "passage": 18, "blank": 10,
+                         {"words": 12, "sentence": 12, "information": 18, "sequence": 10, "passage": 34, "blank": 10,
                           "particles": 40})
         for q in QUESTIONS:
             with self.subTest(question=q["question_id"]):
