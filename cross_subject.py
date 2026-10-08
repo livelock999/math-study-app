@@ -49,7 +49,7 @@ def build_report(math_records, japanese_records, user_id, days=30, now=None):
             if at > now or (start is not None and at < start):
                 continue
             initial = (record["selection_type"] == "normal" if subject == "math" else
-                       record["attempt_count"] == 1 and record["selection_type"] != "retry")
+                       record["attempt_count"] == 1 and record["selection_type"] not in ("retry", "review", "review_retry"))
             selected[subject].append({"at": at, "initial": initial,
                                       "correct": bool(record["is_correct"] if subject == "math" else record["correct"]),
                                       "source": record})
@@ -59,7 +59,9 @@ def build_report(math_records, japanese_records, user_id, days=30, now=None):
         initial = [r for r in rows if r["initial"]]
         retry = [r for r in rows if r["source"]["selection_type"] == "retry"]
         subjects[subject] = {"total": len(rows), "days": len({r["at"].date() for r in rows}),
-                             "initial": summarize(initial), "retry": summarize(retry)}
+                             "initial": summarize(initial), "retry": summarize(retry),
+                             "review": summarize([r for r in rows if r["source"]["selection_type"] == "review"]),
+                             "review_retry": summarize([r for r in rows if r["source"]["selection_type"] == "review_retry"])}
         for row in rows:
             day = daily.setdefault(row["at"].date(), {"math": 0, "japanese": 0})
             day[subject] += 1

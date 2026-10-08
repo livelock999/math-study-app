@@ -314,7 +314,8 @@ class JapaneseAppTests(unittest.TestCase):
         self.assertEqual(self.app.session_state.jp_round["index"], 0)
         self.app.button(key="jp_resume").click().run()
         args = json.loads(self.app.get("component_instance")[0].proto.json_args)
-        self.assertEqual(args["draft"], {"order": partial, "hint_used": True, "elapsed": 12, "reading_help_used": False})
+        self.assertEqual(args["draft"], {"order": partial, "hint_used": True, "hint_level": 1,
+                                         "elapsed": 12, "reading_help_used": False})
         self.event(question["answer"], hint=True, seconds=18.5)
         saved = jp.read_all("user_001")
         self.assertEqual(len(saved), 1)

@@ -39,7 +39,8 @@ create table if not exists public.math_attempts (
     round_size integer,
     round_completed boolean,
     user_equation text,
-    reading_help_used boolean
+    reading_help_used boolean,
+    hint_level smallint check (hint_level between 0 and 3)
 );
 
 -- 既存テーブルの更新。以前の行はNULLのままです。
@@ -47,6 +48,8 @@ alter table public.math_attempts add column if not exists round_size integer;
 alter table public.math_attempts add column if not exists round_completed boolean;
 alter table public.math_attempts add column if not exists user_equation text;
 alter table public.math_attempts add column if not exists reading_help_used boolean;
+alter table public.math_attempts add column if not exists hint_level smallint check (hint_level between 0 and 3);
+alter table public.math_attempts add column if not exists dont_know_used boolean;
 
 create index if not exists math_attempts_user_sessions
     on public.math_attempts (user_id, session_id);

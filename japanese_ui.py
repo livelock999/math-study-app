@@ -12,7 +12,9 @@ import japanese as jp
 from japanese_questions import CATEGORIES, QUESTION_LABELS, ERROR_LABELS
 from furigana import READINGS
 from text_display import component_display, plain_label
-from practice_mode import is_test_mode, write_learning_answer
+from practice_mode import is_test_mode, is_test_round, write_learning_answer
+from daily_review import plan_japanese
+from parent_insights import adaptive_japanese, japanese_hint_steps, review_forecast
 
 keyboard = components.declare_component("japanese_keyboard", path=str(Path(__file__).parent / "japanese_keyboard"))
 
@@ -37,8 +39,8 @@ def initialize():
         st.stop()
 
 
-def start(questions, selection="normal"):
-    if selection != "retry":
+def start(questions, selection="normal", review_reasons=None):
+    if selection not in ("retry", "review_retry"):
         st.session_state.jp_counts = {}
         st.session_state.jp_first_correct = {}
         st.session_state.jp_chains = {q["question_id"]: learning.new_id("jp_chain") for q in questions}
@@ -46,8 +48,44 @@ def start(questions, selection="normal"):
                                  "selection": selection, "index": 0, "answers": [], "phase": "question",
                                  "pending": None, "user_id": st.session_state.user_id,
                                  "paused": False, "resume_revision": 0, "draft": {},
-                                 "test_mode": is_test_mode(st.session_state)}
+                                 "test_mode": is_test_mode(st.session_state),
+                                 "review_reasons": dict(review_reasons or {})}
     goto("jp_practice")
+
+
+def show_review_reasons(state):
+    review = state.get("selection") in ("review", "review_retry")
+    if not review and not (state.get("selection") == "weak_area" and state.get("review_reasons")):
+        return
+    with st.expander("保護者向け：きょうの復習の出題理由" if review else "保護者向け：類題の出題理由"):
+        reasons = state.get("review_reasons", {})
+        for index, question in enumerate(state["questions"], 1):
+            st.write(f"{index}問目：{reasons.get(question['question_id'], '復習した問題の再練習')}")
+        st.caption("復習の回答は初回正答率と分けて記録します。" if review else "類題は新しい教材への回答として、通常の苦手練習に記録します。")
+
+
+def show_problem_feedback(state, question):
+    with st.expander("保護者向け：この問題について報告する"):
+        from learning_extensions import make_feedback, save_feedback
+        index = state["index"]
+        entry = state.setdefault("problem_feedback", {}).setdefault(index, {})
+        labels = {"difficult": "難しすぎる", "reading": "読みづらい", "answer": "問題・答えがおかしい"}
+        reason = st.selectbox("気になったこと", list(labels), format_func=labels.get,
+                              key=f"jp_feedback_reason_{state['session_id']}_{index}",
+                              disabled=bool(entry.get("pending") or entry.get("saved")))
+        if entry.get("saved"):
+            st.success("保存せずに報告を確認しました。" if is_test_round(state, st.session_state) else "この問題の報告を保存しました。")
+        elif st.button("報告を保存する" if not entry.get("pending") else "報告の保存をやりなおす",
+                       key=f"jp_feedback_save_{state['session_id']}_{index}"):
+            if not entry.get("pending"):
+                entry["pending"] = make_feedback(state["user_id"], "japanese", question["question_id"], reason)
+            try:
+                save_feedback(entry["pending"], test_mode=is_test_round(state, st.session_state))
+            except (sqlite3.Error, OSError, ValueError):
+                st.error("報告を保存できませんでした。同じボタンでやりなおせます。")
+            else:
+                entry["saved"] = True
+                st.success("保存せずに報告を確認しました。" if is_test_round(state, st.session_state) else "この問題の報告を保存しました。")
 
 
 def load():
@@ -88,6 +126,41 @@ def settings():
                      horizontal=True, key="jp_count")
     if st.button(plain_label("こくご スタート", st.session_state.user_id), key="jp_start", type="primary", use_container_width=True):
         start(jp.choose_questions(category, count, particle_level=particle_level))
+    if st.button("きょうの ふくしゅう", key="jp_daily_review", use_container_width=True):
+        records = load()
+        if records is not None:
+            try:
+                plan = plan_japanese(records, st.session_state.user_id, particle_level=particle_level, count=5)
+            except (ValueError, KeyError, TypeError):
+                st.error("復習の履歴を確認できませんでした。設定と履歴を確認してください。")
+            else:
+                if plan["items"]:
+                    start(plan["items"], "review", review_reasons=plan["reasons"])
+                else:
+                    st.info(plan["message"])
+    if st.button("にた もんだいで れんしゅう", key="jp_similar", use_container_width=True):
+        records = load()
+        if records is not None:
+            try:
+                plan = adaptive_japanese(records, st.session_state.user_id, particle_level=particle_level, count=5)
+            except (ValueError, KeyError, TypeError):
+                st.error("練習の履歴を確認できませんでした。設定と履歴を確認してください。")
+            else:
+                if plan["items"]:
+                    start(plan["items"], "weak_area", review_reasons=plan.get("reasons"))
+                else:
+                    st.info(plan["message"])
+    with st.expander("保護者向け：復習の予定"):
+        if st.button("復習の予定をみる", key="jp_review_forecast"):
+            records = load()
+            if records is not None:
+                try:
+                    forecast = review_forecast(records, st.session_state.user_id, "japanese", particle_level=particle_level)
+                except (ValueError, KeyError, TypeError):
+                    st.error("復習の予定を確認できませんでした。設定と履歴を確認してください。")
+                else:
+                    st.write(f"きょう：{forecast['today_count']}問 ／ あした：{forecast['tomorrow_count']}問")
+                    st.caption("きょうの復習は1日5問まで。きょうの数は回答済みを除いた残りです。基本問題の補充は含みません。")
     if st.button("にがてを れんしゅう", key="jp_weak", use_container_width=True):
         records = load()
         if records is not None:
@@ -105,7 +178,9 @@ def settings():
             latest = {}
             for record in records:  # 履歴は最新順。最後に正解した問題は除きます。
                 latest.setdefault(record["question_id"], record)
-            wrong = [r for r in latest.values() if not r["correct"]]
+            # 復習の回答は復習セットから再練習し、通常のchainへ混ぜません。
+            wrong = [r for r in latest.values() if not r["correct"]
+                     and r["selection_type"] not in ("review", "review_retry")]
             if wrong:
                 wrong = wrong[:count]
                 st.session_state.jp_counts = {r["question_id"]: r["attempt_count"] for r in wrong}
@@ -154,7 +229,11 @@ def practice():
     index = state["index"]
     question = state["questions"][index]
     st.caption(f"{learning.USERS[st.session_state.user_id]} ／ こくご")
+    if state["selection"] in ("review", "review_retry"):
+        st.caption("きょうの ふくしゅう" if state["selection"] == "review" else "ふくしゅうを もういちど")
     st.progress(index / len(state["questions"]), text=f"{index + 1} / {len(state['questions'])} もん")
+    show_review_reasons(state)
+    show_problem_feedback(state, question)
     if state["pending"] is not None:
         st.write(question["text"])
         st.write(question["question"])
@@ -170,9 +249,10 @@ def practice():
     previous = state["answers"][-1] if state["phase"] == "feedback" else None
     event = keyboard(token=token, question_id=f"{state['session_id']}:{index}", phase=state["phase"],
                      text=question["text"], question=question["question"], choices=question["choices"],
-                     form=question["problem_format"], hint=question["hint"],
+                     form=question["problem_format"], hint=question["hint"], hint_steps=japanese_hint_steps(question),
                      correct=previous["correct"] if previous else None,
                      selected=previous["selected_answer_text"] if previous else None,
+                     dont_know_used=bool(previous and previous.get("dont_know_used")),
                      correct_answer=jp.answer_text(question, question["answer"]) if previous else None,
                      explanation=question["explanation"] if previous else None,
                      last=index + 1 == len(state["questions"]), key="jp_keyboard", default=None,
@@ -186,25 +266,31 @@ def practice():
     if event.get("action") == "back":
         seconds = event.get("response_time_sec")
         order = event.get("draft_order", [])
+        hint_level = event.get("hint_level", 1 if event.get("hint_used") else 0)
         if (type(seconds) not in (int, float) or not math.isfinite(seconds) or seconds < 0
                 or type(event.get("hint_used")) is not bool or type(event.get("reading_help_used", False)) is not bool or not isinstance(order, list)
+                or type(hint_level) is not int or not 0 <= hint_level <= 3
                 or any(type(i) is not int or not 0 <= i < len(question["choices"]) for i in order)
                 or len(order) != len(set(order))):
             return
-        state["draft"] = {"order": order, "hint_used": event["hint_used"], "elapsed": seconds,
+        state["draft"] = {"order": order, "hint_used": event["hint_used"] or hint_level > 0, "elapsed": seconds,
+                          "hint_level": hint_level,
                           "reading_help_used": event.get("reading_help_used", False)}
         state["user_id"] = st.session_state.user_id
         state["paused"] = True
         state["resume_revision"] = state.get("resume_revision", 0) + 1
         goto("jp_settings")
-    if state["phase"] == "question" and event.get("action") == "answer":
+    if state["phase"] == "question" and event.get("action") in ("answer", "dont_know"):
+        dont_know = event.get("action") == "dont_know"
         try:
             record = jp.make_record(question, st.session_state.user_id, state["session_id"], index + 1,
-                                    state["selection"], event.get("answer"), event.get("response_time_sec"),
+                                    state["selection"], None if dont_know else event.get("answer"), event.get("response_time_sec"),
                                     st.session_state.jp_counts.get(question["question_id"], 0) + 1,
                                     st.session_state.jp_chains[question["question_id"]], event.get("hint_used", False),
                                     first_try_correct=st.session_state.get("jp_first_correct", {}).get(question["question_id"]),
-                                    reading_help_used=event.get("reading_help_used", False))
+                                    reading_help_used=event.get("reading_help_used", False),
+                                    hint_level=event.get("hint_level", 1 if event.get("hint_used") else 0),
+                                    dont_know_used=dont_know)
         except (ValueError, TypeError):
             st.error("こたえを たしかめてね。")
             return
@@ -224,12 +310,16 @@ def results():
     state = st.session_state.jp_round
     correct = sum(r["correct"] for r in state["answers"])
     st.subheader("こくごの れんしゅう おわり！")
+    if state["selection"] in ("review", "review_retry"):
+        st.write("きょうの ふくしゅうの けっか" if state["selection"] == "review" else "ふくしゅうを もういちどの けっか")
+    show_review_reasons(state)
     st.metric("せいかい", f"{len(state['answers'])}もんちゅう {correct}もん")
     st.metric("せいかいりつ", f"{correct / len(state['answers']):.0%}")
     wrong = [q for q, row in zip(state["questions"], state["answers"]) if not row["correct"]]
     if wrong:
         if st.button("まちがえた もんだいを もういちど", key="jp_retry", type="primary", use_container_width=True):
-            start(wrong, "retry")
+            review = state["selection"] in ("review", "review_retry")
+            start(wrong, "review_retry" if review else "retry", review_reasons=state.get("review_reasons"))
     else:
         st.success("ぜんぶ せいかい！ よく がんばったね！")
     navigation("jp_results")
@@ -264,7 +354,11 @@ def history():
               "質問タイプ": QUESTION_LABELS[r["question_word"]], "難易度": r["difficulty"],
               "思考レベル": r["reasoning_level"], "回答時間（秒）": r["response_time_sec"],
               "回答回数": r["attempt_count"],
+              "練習": {"normal": "初回", "weak_area": "苦手練習", "retry": "再練習",
+                       "review": "きょうの復習", "review_retry": "復習の再練習"}.get(r["selection_type"], r["selection_type"]),
               "ヒント": "記録なし" if r.get("hint_used") is None else "あり" if r["hint_used"] else "なし",
+              "ヒント段階": r["hint_level"] if r.get("hint_level") is not None else "記録なし",
+              "わからない": "あり" if r.get("dont_know_used") else "なし",
               "読み方の確認": "記録なし" if r.get("reading_help_used") is None else "あり" if r["reading_help_used"] else "なし",
               "読み方": "自力読み" if r["reading_mode"] == "self_read" else "読み上げ",
               "再回答": "あり" if r["retry_flag"] else "なし",
@@ -305,6 +399,10 @@ def analysis():
                     format_func=lambda m: "自力読み" if m == "self_read" else "読み上げ", key="jp_reading_filter")
     report = jp.analyze(records, reading_mode=mode)
     summary = report["summary"]
+    with st.expander("きょうの復習の成果（初回とは別集計）"):
+        for label, key in (("復習", "review"), ("復習の再練習", "review_retry")):
+            data = report.get(key, {})
+            st.write(f"{label}：{data.get('correct', 0)} / {data.get('count', 0)}問正解")
     if not summary["total"]:
         st.info("この読み方の学習記録はまだありません。読み上げ機能は今後追加予定です。" if mode == "audio"
                 else "まだ国語の学習記録がありません。")
