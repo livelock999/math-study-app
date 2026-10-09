@@ -10,23 +10,73 @@ import unicodedata
 from learning import make_problem
 
 
-def generate_cards(answer_min=11, answer_max=18, count=20, order="shuffle"):
+def card_pool(operation, answer_min, answer_max):
+    """1年生の加法・20までの減法から、指定した答えのカードを作ります。"""
+    lefts = range(1, 10) if operation == "addition" else range(1, 21)
+    pool = [make_problem(operation, 20, left, right)
+            for left in lefts for right in range(1, 10)
+            if answer_min <= (left + right if operation == "addition" else left - right) <= answer_max]
+    return sorted(pool, key=lambda problem: (problem["correct_answer"], problem["left_operand"], problem["right_operand"]))
+
+
+def selection_error(answer_min=11, answer_max=18, count=20, order="shuffle", mode="addition"):
+    if mode not in ("addition", "subtraction", "mixed"):
+        return "カードの種類が不正です。"
+    minimum, maximum = (2, 18) if mode == "addition" else (0, 19)
     if (any(type(value) is not int for value in (answer_min, answer_max, count))
-            or not 2 <= answer_min <= answer_max <= 18 or not 1 <= count <= 100
+            or not minimum <= answer_min <= answer_max <= maximum or not 1 <= count <= 100
             or order not in ("ordered", "shuffle")):
-        raise ValueError("カードの答え範囲・問題数・順番が不正です。")
-    pool = [make_problem("addition", 20, left, right)
-            for left in range(1, 10) for right in range(1, 10)
-            if answer_min <= left + right <= answer_max]
-    pool.sort(key=lambda problem: (problem["correct_answer"], problem["left_operand"], problem["right_operand"]))
+        return "カードの答え範囲・問題数・順番が不正です。"
+    operations = ("addition", "subtraction") if mode == "mixed" else (mode,)
+    if mode == "mixed" and count < 2:
+        return "ミックスでは、たし算とひき算を出すため2問以上にしてください。"
+    for operation in operations:
+        if not card_pool(operation, answer_min, answer_max):
+            name = "たし算" if operation == "addition" else "ひき算"
+            return f"この答え範囲では{name}のカードがありません。両方を含める範囲にしてください。"
+    return None
+
+
+def _draw_cards(pool, count, shuffle):
+    """デッキを使い切るまで重複させず、不足したら繰り返します。"""
     cards = []
     while len(cards) < count:
         deck = list(pool)
-        if order == "shuffle":
+        if shuffle:
             random.shuffle(deck)
         if len(deck) > 1 and cards and deck[0]["problem_id"] == cards[-1]["problem_id"]:
             deck[0], deck[1] = deck[1], deck[0]
         cards.extend(dict(problem) for problem in deck[:count - len(cards)])
+    return cards
+
+
+def generate_cards(answer_min=11, answer_max=18, count=20, order="shuffle", mode="addition"):
+    error = selection_error(answer_min, answer_max, count, order, mode)
+    if error:
+        raise ValueError(error)
+    if mode != "mixed":
+        return _draw_cards(card_pool(mode, answer_min, answer_max), count, order == "shuffle")
+    # 奇数の1問は毎回ランダムに配分。ミックスは順番指定でもシャッフルします。
+    extra_addition = random.choice((0, 1)) if count % 2 else 0
+    addition_count = count // 2 + extra_addition
+    cards = (_draw_cards(card_pool("addition", answer_min, answer_max), addition_count, True)
+             + _draw_cards(card_pool("subtraction", answer_min, answer_max), count - addition_count, True))
+    random.shuffle(cards)
+    # 直後連続がある場合だけ並べ直します。残りが多いカードを先に使い、
+    # 同数なら上のシャッフル順を採用すると、最後に同一カードが余りません。
+    if any(left["problem_id"] == right["problem_id"] for left, right in zip(cards, cards[1:])):
+        buckets = defaultdict(list)
+        for card in cards:
+            buckets[card["problem_id"]].append(card)
+        arranged = []
+        while buckets:
+            previous = arranged[-1]["problem_id"] if arranged else None
+            candidates = [key for key in buckets if key != previous] or list(buckets)
+            key = max(candidates, key=lambda item: len(buckets[item]))
+            arranged.append(buckets[key].pop())
+            if not buckets[key]:
+                del buckets[key]
+        return arranged
     return cards
 
 
@@ -69,11 +119,18 @@ def summarize(records):
 
 
 def report_tables(records):
-    groups = {name: defaultdict(list) for name in ("problems", "structures", "days", "inputs", "ranges")}
+    groups = {name: defaultdict(list) for name in ("problems", "structures", "days", "inputs", "ranges", "operations")}
     for record in records:
         groups["problems"][record["question_text"]].append(record)
-        structure = (f"{record['number_range']}まで／繰り上がり{'あり' if record['carry'] else 'なし'}／"
-                     f"10またぎ{'あり' if record['crosses_10'] else 'なし'}／同じ数{'あり' if record['doubles'] else 'なし'}")
+        addition = record["operation"] == "addition"
+        operation_name = "たし算" if addition else "ひき算"
+        attribute_name = "繰り上がり" if addition else "繰り下がり"
+        attribute = record["carry"] if addition else record["borrowing"]
+        groups["operations"][operation_name].append(record)
+        structure = (f"{operation_name}／{record['number_range']}まで／{attribute_name}{'あり' if attribute else 'なし'}／"
+                     f"10またぎ{'あり' if record['crosses_10'] else 'なし'}")
+        if addition:
+            structure += f"／同じ数{'あり' if record['doubles'] else 'なし'}"
         groups["structures"][structure].append(record)
         groups["inputs"][{"voice": "声", "keyboard": "数字キー", "keypad": "画面テンキー"}.get(record.get("input_method"), "記録なし")].append(record)
         groups["ranges"][f"答え{record.get('answer_range_min', '—')}〜{record.get('answer_range_max', '—')}"].append(record)

@@ -70,6 +70,107 @@ class FlashcardUIAppTests(unittest.TestCase):
         value = state['cards'][state['index']]['correct_answer'] if correct else 0
         return self.event('answer', input_method=method, answer=value)
 
+    def configure_mode(self, mode, lower=None, upper=None):
+        self.app.session_state.screen = 'flashcard_settings'
+        self.app.run()
+        self.app.radio(key='fc_mode').set_value(mode).run()
+        if lower is not None:
+            self.app.number_input(key='fc_min').set_value(lower).run()
+        if upper is not None:
+            self.app.number_input(key='fc_max').set_value(upper).run()
+        self.app.select_slider(key='fc_count').set_value(5).run()
+        self.assertFalse(self.app.exception)
+
+    def test_mode_switch_resets_ranges_and_invalid_mixed_range_disables_start(self):
+        for mode, lower, upper in (('subtraction', 0, 9), ('mixed', 0, 18), ('addition', 11, 18)):
+            self.configure_mode(mode)
+            self.assertEqual((self.app.number_input(key='fc_min').value, self.app.number_input(key='fc_max').value),
+                             (lower, upper))
+        self.configure_mode('mixed', 0, 1)
+        self.assertTrue(self.app.button(key='fc_start').disabled)
+        self.assertEqual(self.rows(), [])
+        self.configure_mode('subtraction', 19, 19)
+        self.assertFalse(self.app.button(key='fc_start').disabled)
+
+    def test_subtraction_unknown_speech_is_unscored_and_zero_fast_voice_saves(self):
+        self.configure_mode('subtraction', 0, 0)
+        self.click('fc_start')
+        state = self.app.session_state.fc_round
+        self.assertEqual(state['mode'], 'subtraction')
+        self.event('answer', input_method='voice', recognized_text='たぶんゼロ', voice_enabled=True)
+        self.assertEqual(self.rows(), [])
+        self.assertEqual(state['index'], 0)
+        self.assertEqual(state['phase'], 'question')
+        self.event('answer', input_method='voice', recognized_text='れい', voice_enabled=True)
+        row = self.rows()[0]
+        self.assertEqual((row['operation'], row['correct_answer'], row['parsed_answer'], row['user_answer']),
+                         ('subtraction', 0, 0, 0))
+        self.assertTrue(row['is_correct'])
+        self.assertEqual(row['recognition_retry_count'], 1)
+        self.assertEqual(state['index'], 1)
+
+    def test_mixed_round_saves_both_operations_and_retry_keeps_mode_and_initial_false(self):
+        self.configure_mode('mixed')
+        self.click('fc_start')
+        state = self.app.session_state.fc_round
+        original = deepcopy(state['cards'][0])
+        wrong = (original['correct_answer'] + 1) % 100
+        self.event('answer', input_method='keyboard', answer=wrong)
+        self.event('next')
+        for _ in range(4):
+            self.answer()
+            self.event('next')
+        self.assertEqual(self.app.session_state.screen, 'flashcard_results')
+        self.assertEqual({row['operation'] for row in self.rows()}, {'addition', 'subtraction'})
+        self.click('fc_retry')
+        retry_state = self.app.session_state.fc_round
+        self.assertEqual(retry_state['mode'], 'mixed')
+        self.assertEqual(retry_state['cards'], [original])
+        self.answer()
+        self.event('next')
+        rows = self.rows()
+        self.assertEqual(len(rows), 6)
+        retry = next(row for row in rows if row['selection_type'] == 'retry')
+        initial = next(row for row in rows if row['question_order'] == 1 and row['selection_type'] == 'normal')
+        self.assertNotEqual(retry['attempt_id'], initial['attempt_id'])
+        self.assertEqual(retry['problem_id'], initial['problem_id'])
+        self.assertEqual(retry['attempt_count'], 2)
+        self.assertFalse(retry['first_attempt_correct'])
+        self.assertTrue(retry['is_correct'])
+
+    def test_subtraction_fast_voice_save_retry_never_overwrites_and_advances_once(self):
+        self.configure_mode('subtraction', 0, 0)
+        self.click('fc_start')
+        state = self.app.session_state.fc_round
+        self.lost = True
+        old = self.event('answer', input_method='voice', recognized_text='0', voice_enabled=True)
+        pending = deepcopy(state['pending'])
+        self.assertEqual(state['index'], 0)
+        self.assertEqual(state['answers'], [])
+        self.assertEqual(len(self.rows()), 1)
+        self.click('fc_retry_save')
+        self.assertEqual(state['index'], 1)
+        self.assertEqual(self.rows()[0]['attempt_id'], pending['attempt_id'])
+        self.keyboard.return_value = old
+        self.app.run()
+        self.keyboard.return_value = None
+        self.assertEqual(state['index'], 1)
+        self.assertEqual(len(self.rows()), 1)
+
+    def test_subtraction_and_mixed_parent_test_do_not_call_real_writer(self):
+        for mode in ('subtraction', 'mixed'):
+            self.app.session_state.parent_test_mode = True
+            self.configure_mode(mode)
+            self.click('fc_start')
+            self.app.session_state.parent_test_mode = False
+            state = self.app.session_state.fc_round
+            for index in range(5):
+                self.event('answer', input_method='voice', voice_enabled=True,
+                           recognized_text=str(state['cards'][index]['correct_answer']))
+            self.assertEqual(self.app.session_state.screen, 'flashcard_results')
+            self.assertEqual(self.saved_calls, [])
+            self.assertEqual(self.rows(), [])
+
     def test_unknown_and_wrong_speech_confirmation_manual_fallback_metadata(self):
         self.event('recognition_failed', recognized_text='わからない')
         self.assertEqual(self.rows(), [])
@@ -105,7 +206,9 @@ class FlashcardUIAppTests(unittest.TestCase):
             self.answer()
             self.event('next')
         self.assertEqual(self.app.session_state.screen, 'flashcard_results')
+        self.app.session_state.fc_round.pop('mode', None)  # 更新前の加算セットを模す。
         self.click('fc_retry')
+        self.assertEqual(self.app.session_state.fc_round['mode'], 'addition')
         self.answer()
         self.event('next')
         rows = self.rows()

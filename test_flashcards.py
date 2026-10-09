@@ -2,6 +2,7 @@
 import unittest
 import json
 import sqlite3
+import random
 from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,6 +26,87 @@ def card_record(method='voice'):
 
 
 class FlashcardTests(unittest.TestCase):
+    def setUp(self):
+        self.addCleanup(random.setstate, random.getstate())
+
+    def test_subtraction_cards_cover_zero_borrowing_and_never_negative(self):
+        for lower, upper in ((0, 0), (0, 9), (10, 19), (19, 19)):
+            cards = flashcards.generate_cards(lower, upper, 50, 'ordered', mode='subtraction')
+            self.assertEqual(len(cards), 50)
+            for card in cards:
+                self.assertEqual(card['operation'], 'subtraction')
+                self.assertTrue(1 <= card['left_operand'] <= 20)
+                self.assertTrue(1 <= card['right_operand'] <= 9)
+                self.assertTrue(lower <= card['correct_answer'] <= upper)
+                self.assertEqual(card['correct_answer'], card['left_operand'] - card['right_operand'])
+                self.assertIsNone(card['carry'])
+                self.assertEqual(card['borrowing'], card['left_operand'] % 10 < card['right_operand'])
+        pool = flashcards.generate_cards(0, 19, 100, 'ordered', mode='subtraction')
+        self.assertTrue(any(card['borrowing'] for card in pool))
+        self.assertTrue(any(not card['borrowing'] for card in pool))
+        self.assertTrue(any(card['correct_answer'] == 0 for card in pool))
+
+    def test_mixed_decks_balanced_unique_when_possible_and_seeded_shuffle(self):
+        odd_majorities = set()
+        sequences = set()
+        for seed in range(10):
+            for count in (5, 20, 50):
+                random.seed(seed)
+                cards = flashcards.generate_cards(0, 18, count, 'ordered', mode='mixed')
+                operations = [card['operation'] for card in cards]
+                addition = operations.count('addition')
+                subtraction = operations.count('subtraction')
+                self.assertLessEqual(abs(addition - subtraction), 1)
+                self.assertGreater(min(addition, subtraction), 0)
+                self.assertEqual(len({card['problem_id'] for card in cards}), count)
+                if count == 5:
+                    odd_majorities.add('addition' if addition > subtraction else 'subtraction')
+                    sequences.add(tuple(card['problem_id'] for card in cards))
+        self.assertEqual(odd_majorities, {'addition', 'subtraction'})
+        self.assertGreater(len(sequences), 1)
+        random.seed(34)
+        a = flashcards.generate_cards(0, 18, 20, 'ordered', mode='mixed')
+        random.seed(34)
+        b = flashcards.generate_cards(0, 18, 20, 'ordered', mode='mixed')
+        self.assertEqual(a, b)
+
+    def test_mixed_small_pool_repeats_and_invalid_ranges_fail_before_generation(self):
+        cards = flashcards.generate_cards(2, 2, 20, mode='mixed')
+        self.assertEqual(sum(card['operation'] == 'addition' for card in cards), 10)
+        self.assertTrue(all(card['correct_answer'] == 2 for card in cards))
+        for kwargs in ({'answer_min': 0, 'answer_max': 1, 'mode': 'mixed'},
+                       {'answer_min': 19, 'answer_max': 19, 'mode': 'mixed'},
+                       {'answer_min': 0, 'answer_max': 18, 'count': 1, 'mode': 'mixed'},
+                       {'answer_min': 20, 'answer_max': 20, 'mode': 'subtraction'},
+                       {'mode': 'mix'}, {'mode': None}, {'mode': True}):
+            with self.subTest(kwargs=kwargs):
+                values = dict(answer_min=11, answer_max=18, count=20, order='shuffle', mode='addition')
+                values.update(kwargs)
+                self.assertIsNotNone(flashcards.selection_error(**values))
+                with self.assertRaises(ValueError):
+                    flashcards.generate_cards(**values)
+
+    def test_operation_and_structure_tables_distinguish_borrowing_from_carry(self):
+        rows = []
+        for operation, left, right in (('addition', 9, 4), ('subtraction', 13, 4), ('subtraction', 9, 4)):
+            problem = learning.make_problem(operation, 20, left, right)
+            row = learning.make_attempt(problem, 'user_001', 'structure', 1, 'normal',
+                                        problem['correct_answer'], 2, 1)
+            row.update(learning_mode='flashcard', input_method='keyboard', answer_range_min=0, answer_range_max=18)
+            rows.append(row)
+        tables = flashcards.report_tables(rows)
+        self.assertEqual(len(tables['operations']), 2)
+        self.assertEqual(len(tables['structures']), 3)
+        structures = ' '.join(row['分類'] for row in tables['structures'])
+        self.assertIn('繰り上がりあり', structures)
+        self.assertIn('繰り下がりあり', structures)
+        self.assertIn('繰り下がりなし', structures)
+        for group in tables['structures']:
+            if '繰り下がり' in group['分類']:
+                self.assertNotIn('同じ数', group['分類'])
+            else:
+                self.assertIn('同じ数', group['分類'])
+
     def session_rows(self, size=3):
         rows = []
         for index, seconds in enumerate((1, 5, 3), 1):
