@@ -27,6 +27,34 @@ def roundtrip(row):
 
 
 class CardBackupTests(unittest.TestCase):
+    def test_subtraction_zero_and_mixed_session_roundtrip_without_new_columns(self):
+        records = []
+        for index, (operation, left, right, method) in enumerate((('subtraction', 5, 5, 'voice'),
+                                                               ('subtraction', 13, 4, 'keypad'),
+                                                               ('addition', 9, 4, 'keyboard')), 1):
+            problem = learning.make_problem(operation, 20, left, right)
+            answer = problem['correct_answer']
+            row = learning.make_attempt(problem, 'user_001', 'mixed-session', index, 'normal', answer, 2, 1, round_size=3)
+            row.update(learning_mode='flashcard', answer_range_min=0, answer_range_max=18,
+                       input_method=method, recognized_text='れい' if method == 'voice' else None,
+                       parsed_answer=answer if method == 'voice' else None,
+                       recognition_success=True if method == 'voice' else None,
+                       recognition_retry_count=1, total_recognition_retry_count=index,
+                       session_elapsed_sec=index * 3, first_attempt_correct=True)
+            records.append(row)
+        value = backup.parse_backup(backup.export_backup('user_001', records, []), 'user_001')
+        self.assertEqual(value['math'], records)
+        self.assertEqual(value['math'][0]['parsed_answer'], 0)
+        with TemporaryDirectory() as folder:
+            math_path, jp_path = Path(folder) / 'math.sqlite3', Path(folder) / 'jp.sqlite3'
+            learning.init_db(math_path)
+            japanese.init_db(jp_path)
+            self.assertEqual(backup.restore_backup(value, math_path=math_path, japanese_path=jp_path)['math_added'], 3)
+            self.assertEqual(backup.restore_backup(value, math_path=math_path, japanese_path=jp_path)['math_existing'], 3)
+            rows, _ = learning.read_attempts('user_001', path=math_path)
+            self.assertEqual({row['operation'] for row in rows}, {'addition', 'subtraction'})
+            self.assertEqual(sum(row['round_completed'] for row in rows), 1)
+
     def test_voice_roundtrip_and_boolean_normalization(self):
         result = roundtrip(record(recognition_success=1, first_attempt_correct=1))["math"][0]
         self.assertIs(result["recognition_success"], True)
