@@ -118,6 +118,22 @@ interrupted.onresult(speech('3')); interrupted.onspeechend();
 assert.equal(answers().length, afterManual);
 assert.equal(answers().at(-1).input_method, 'keyboard');
 
+render('readonly');
+const readonlyInput = root.querySelectorAll('input')[0];
+assert.equal(readonlyInput.readOnly, true);
+assert.equal(readonlyInput.inputMode, 'none');
+function numberKey(key, extra = {}) { readonlyInput.onkeydown({key, preventDefault() {}, ...extra}); }
+numberKey('１'); numberKey('3'); numberKey('4');
+assert.equal(readonlyInput.value, '13');
+numberKey('Backspace'); assert.equal(readonlyInput.value, '1');
+numberKey('2', {isComposing: true}); assert.equal(readonlyInput.value, '1');
+numberKey('2', {ctrlKey: true}); assert.equal(readonlyInput.value, '1');
+numberKey('2'); numberKey('Enter'); assert.equal(answers().at(-1).answer, 12);
+assert.equal(answers().at(-1).input_method, 'keyboard');
+render('keypad-only');
+button('1').onclick(); button('3').onclick(); button('けす').onclick(); button('2').onclick(); button('こたえる').onclick();
+assert.equal(answers().at(-1).answer, 12); assert.equal(answers().at(-1).input_method, 'keypad');
+
 render('k', 'question', {voice_enabled: true});
 const queued = [...timers.values()].find(timer => timer.delay === 0), beforeHidden = instances.length;
 context.document.visibilityState = 'hidden'; documentListeners.visibilitychange(); queued.callback();

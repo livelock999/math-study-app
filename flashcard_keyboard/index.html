@@ -56,6 +56,7 @@ window.addEventListener('message',event=>{
     if(args.previous_correct===true)card.append(paragraph('○ まえのカード せいかい','note'));
     if(args.voice_failures)card.append(paragraph('声をたしかめられませんでした。もういちど、またはテンキーで答えてね。'));
     const input=document.createElement('input');input.id='answer';input.type='text';input.inputMode='numeric';input.maxLength=2;
+    input.readOnly=true;input.inputMode='none';
     input.autocomplete='off';input.setAttribute('aria-label','こたえ');
     const error=paragraph('','error');error.setAttribute('role','alert');
     function answer(){
@@ -121,7 +122,24 @@ window.addEventListener('message',event=>{
       }));
     }
     card.append(keys,paragraph('声が数字として分からないときは採点しません。音声ファイルは保存しません。'),button('設定へ もどる',()=>{voiceEnabled=false;emit('back')}));
-    input.onkeydown=event=>{if(event.key==='Enter'&&!event.isComposing&&!event.repeat){event.preventDefault();answer()}};
+    input.onkeydown=event=>{
+      if(pending||event.isComposing||event.ctrlKey||event.metaKey||event.altKey)return;
+      if(/^[0-9０-９]$/.test(event.key)||['Backspace','Delete'].includes(event.key)){
+        event.preventDefault();inputMethod='keyboard';
+        const value=input.value;
+        let start=Number.isInteger(input.selectionStart)?input.selectionStart:value.length;
+        let end=Number.isInteger(input.selectionEnd)?input.selectionEnd:start;
+        const digit=event.key.replace(/[０-９]/g,c=>String.fromCharCode(c.charCodeAt(0)-0xfee0));
+        if(/^\d$/.test(digit)){
+          if(value.length-(end-start)>=input.maxLength)return;
+          input.value=value.slice(0,start)+digit+value.slice(end);start++;
+        }else{
+          if(start===end){if(event.key==='Backspace')start=Math.max(0,start-1);else end=Math.min(value.length,end+1)}
+          input.value=value.slice(0,start)+value.slice(end);
+        }
+        input.setSelectionRange?.(start,start);error.textContent='';
+      }else if(event.key==='Enter'&&!event.repeat){event.preventDefault();answer()}
+    };
     if(!voiceEnabled)focusInitial(input);
   }
   root.append(card);resize();
