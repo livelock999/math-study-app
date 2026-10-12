@@ -26,6 +26,15 @@ import school_scope as school
 
 WORD_FORMATS = ("word_problem", "three_word_problem")
 
+
+def access_setting(name, default=""):
+    if name in os.environ:
+        return os.environ[name]
+    try:
+        return st.secrets.get(name, default)
+    except FileNotFoundError:
+        return default
+
 st.set_page_config(page_title="さんすう・こくご れんしゅう", page_icon="📚", layout="centered")
 keyboard = components.declare_component("math_keyboard", path=str(Path(__file__).parent / "keyboard"))
 
@@ -114,6 +123,15 @@ def save_pending_answer(state):
 
 def user_screen():
     st.subheader("だれが れんしゅうする？")
+    if st.session_state.get('access_granted'):
+        from family_access import family_link_key
+        key = family_link_key(access_setting)
+        if key:
+            with st.expander("保護者向け：子ども用リンク"):
+                url = 'https://math-study-livelock999.streamlit.app/?family=' + key
+                st.caption("このリンクはパスワード入力なしで名前選択へ進みます。家族内だけで共有し、端末のホーム画面やブックマークに保存してください。リンクを持つ人は学習履歴も見られます。")
+                st.link_button("子ども用リンクをひらく", url)
+                st.code(url, language=None)
     if not is_test_mode(st.session_state):
         with st.expander("保護者の操作確認"):
             st.caption("テスト中の回答は、履歴・分析・スタンプに残りません。開始すると途中の練習を終了します。")
@@ -822,17 +840,16 @@ def report_screen():
 
 
 def check_access():
-    """公開時の家族用パスワード。ローカルでは設定しなければ不要です。"""
-    def setting(name, default=""):
-        if name in os.environ:
-            return os.environ[name]
-        try:
-            return st.secrets.get(name, default)
-        except FileNotFoundError:
-            return default
+    """家族専用リンクまたはパスワード。認証前には履歴へアクセスしない。"""
+    setting = access_setting
 
     required = str(setting("MATH_REQUIRE_PASSWORD", "false")).lower() == "true"
     if not required:
+        return
+    from family_access import LINK_PARAMETER, valid_family_link, family_link_key
+    if valid_family_link(st.query_params.get_all(LINK_PARAMETER), family_link_key(setting)):
+        # セッションに認証済みフラグを残さず毎回照合。鍵を変更・削除すれば旧リンクは無効。
+        # URLの鍵は再読み込み・ホーム画面からの再訪問にも必要なので保持する。
         return
     password = str(setting("MATH_APP_PASSWORD"))
     if not password:
