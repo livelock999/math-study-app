@@ -8,6 +8,8 @@ from unittest.mock import patch
 from streamlit.testing.v1 import AppTest
 import learning
 import japanese
+import flashcards
+import history_backup
 from test_learning import test_environment
 
 
@@ -389,6 +391,94 @@ class FlashcardUIAppTests(unittest.TestCase):
         self.assertFalse(state['voice_enabled'])
         self.assertEqual(state['voice_failures'], 3)
         self.assertEqual(self.rows(), [])
+
+    def test_dont_know_saves_no_answer_shows_solution_and_preserves_backup(self):
+        state = self.app.session_state.fc_round
+        self.assertIsNone(self.keyboard.call_args.kwargs['correct_answer'])
+        self.event('recognition_failed', recognized_text='', voice_enabled=True)
+        old = self.event('dont_know', answer=99, input_method='voice', recognized_text='99', voice_enabled=True)
+        self.assertEqual(state['phase'], 'saved')
+        self.assertEqual(state['index'], 0)
+        self.assertFalse(state['voice_enabled'])
+        row = self.rows()[0]
+        self.assertTrue(row['dont_know_used'])
+        self.assertFalse(row['is_correct'])
+        self.assertFalse(row['first_attempt_correct'])
+        self.assertIsNone(row['user_answer'])
+        self.assertIsNone(row['calculation_correct'])
+        self.assertEqual(row['input_method'], 'keypad')
+        self.assertEqual(row['recognition_retry_count'], 1)
+        for name in ('recognized_text', 'parsed_answer', 'recognition_success'):
+            self.assertIsNone(row[name])
+        self.assertTrue(self.keyboard.call_args.kwargs['dont_know_used'])
+        self.assertEqual(self.keyboard.call_args.kwargs['correct_answer'], state['cards'][0]['correct_answer'])
+        restored = history_backup.parse_backup(history_backup.export_backup('user_001', [row], []), 'user_001')
+        self.assertEqual(restored['math'], [row])
+        self.keyboard.return_value = old
+        self.app.run()
+        self.keyboard.return_value = None
+        self.assertEqual(len(self.rows()), 1)
+        self.event('next')
+        self.assertEqual(state['index'], 1)
+        self.assertIsNone(self.keyboard.call_args.kwargs['correct_answer'])
+
+    def test_dont_know_save_retry_keeps_same_id_and_waits_for_next(self):
+        state = self.app.session_state.fc_round
+        self.lost = True
+        self.event('dont_know', voice_enabled=True)
+        pending = deepcopy(state['pending'])
+        self.assertEqual(state['index'], 0)
+        self.assertEqual(state['answers'], [])
+        self.assertFalse(state['advance_after_save'])
+        self.click('fc_retry_save')
+        self.assertEqual(len(self.rows()), 1)
+        self.assertEqual(self.rows()[0]['attempt_id'], pending['attempt_id'])
+        self.assertEqual(state['phase'], 'saved')
+        self.assertEqual(state['index'], 0)
+        self.event('next')
+        self.assertEqual(state['index'], 1)
+
+    def test_dont_know_finishes_round_and_is_in_retry_and_report(self):
+        state = self.app.session_state.fc_round
+        for index in range(5):
+            self.event('dont_know')
+            self.assertEqual(state['index'], index)
+            self.event('next')
+        self.assertEqual(self.app.session_state.screen, 'flashcard_results')
+        rows = self.rows()
+        self.assertEqual(flashcards.summarize(rows)['dont_know'], 5)
+        self.assertEqual(flashcards.session_table(rows)[0]['わからない（回）'], 5)
+        self.assertEqual(flashcards.report_tables(rows)['inputs'][0]['分類'], 'わからない')
+        self.assertEqual(self.app.metric[0].value, '0もん せいかい')
+        self.assertIn('わからなかった', self.app.button(key='fc_retry').label)
+        self.click('fc_retry')
+        retry = self.app.session_state.fc_round
+        self.assertEqual(len(retry['cards']), 5)
+        self.assertEqual(retry['selection_type'], 'retry')
+        self.answer()
+        self.assertFalse(retry['answers'][0]['first_attempt_correct'])
+        self.assertTrue(retry['answers'][0]['is_correct'])
+
+    def test_dont_know_in_test_mode_does_not_write_history(self):
+        self.app.session_state.parent_test_mode = True
+        self.app.session_state.screen = 'flashcard_settings'
+        self.app.run()
+        self.click('fc_start')
+        self.event('dont_know')
+        self.assertEqual(self.rows(), [])
+        self.assertEqual(self.saved_calls, [])
+        self.assertTrue(self.app.session_state.fc_round['answers'][0]['dont_know_used'])
+
+    def test_dont_know_subtraction_zero_and_mixed(self):
+        for mode in ('subtraction', 'mixed'):
+            self.configure_mode(mode, 0, 9)
+            self.click('fc_start')
+            state = self.app.session_state.fc_round
+            if mode == 'subtraction':
+                state['cards'][0] = learning.make_problem('subtraction', 20, 1, 1)
+            self.event('dont_know')
+            self.assertTrue(state['answers'][0]['dont_know_used'])
+            self.assertEqual(self.keyboard.call_args.kwargs['correct_answer'], state['cards'][0]['correct_answer'])
 
 
 if __name__ == '__main__':

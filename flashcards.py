@@ -112,6 +112,7 @@ def summarize(records):
     correct = sum(bool(row["is_correct"]) for row in records)
     first = [row for row in records if row.get("attempt_count") == 1 and row.get("selection_type") == "normal"]
     return {"count": len(records), "correct": correct, "rate": correct / len(records) if records else None,
+            "dont_know": sum(bool(row.get("dont_know_used")) for row in records),
             "first_count": len(first), "first_rate": sum(bool(row["is_correct"]) for row in first) / len(first) if first else None,
             "average_seconds": mean(times) if times else None, "median_seconds": median(times) if times else None,
             "fastest_seconds": min(times) if times else None, "slowest_seconds": max(times) if times else None,
@@ -132,11 +133,13 @@ def report_tables(records):
         if addition:
             structure += f"／同じ数{'あり' if record['doubles'] else 'なし'}"
         groups["structures"][structure].append(record)
-        groups["inputs"][{"voice": "声", "keyboard": "数字キー", "keypad": "画面テンキー"}.get(record.get("input_method"), "記録なし")].append(record)
+        input_label = "わからない" if record.get("dont_know_used") else {"voice": "声", "keyboard": "数字キー", "keypad": "画面テンキー"}.get(record.get("input_method"), "記録なし")
+        groups["inputs"][input_label].append(record)
         groups["ranges"][f"答え{record.get('answer_range_min', '—')}〜{record.get('answer_range_max', '—')}"].append(record)
         day = datetime.fromisoformat(record["datetime"]).astimezone(timezone(timedelta(hours=9))).strftime("%Y/%m/%d")
         groups["days"][day].append(record)
     return {name: [{"分類": label, "回答数": len(rows), "正答率": f"{summarize(rows)['rate']:.0%}",
+                    "わからない（回）": summarize(rows)["dont_know"],
                     "平均（秒）": round(summarize(rows)["average_seconds"], 2),
                     "最速（秒）": round(summarize(rows)["fastest_seconds"], 2),
                     "最長（秒）": round(summarize(rows)["slowest_seconds"], 2),
@@ -164,6 +167,7 @@ def session_table(records):
             "練習": "再練習" if latest["selection_type"] == "retry" else "通常カード",
             "保存済み問題数": len(rows), "設定問題数": latest.get("round_size"),
             "正答数": summary["correct"], "正答率": f"{summary['rate']:.0%}",
+            "わからない（回）": summary["dont_know"],
             "同カード初回正答率": f"{summary['first_rate']:.0%}" if summary["first_rate"] is not None else "—",
             "平均（秒）": round(summary["average_seconds"], 2), "最速（秒）": round(summary["fastest_seconds"], 2),
             "最長の問題": longest["question_text"], "最長（秒）": longest["response_time_sec"],
