@@ -64,7 +64,7 @@ def settings_screen():
         "mixed": "たし算とひき算をほぼ半分ずつ、シャッフルで出します。両方のカードがある答え範囲を選んでね。",
     }
     st.caption(descriptions[mode])
-    st.caption("答えを声・数字キー・テンキーで回答すると、自動で次へ進みます。")
+    st.caption("答えを声・数字キー・テンキーで回答すると、自動で次へ進みます。わからないときは答えを見てから次へ進めます。")
     minimum, maximum = (2, 18) if mode == "addition" else (0, 19)
     low_default, high_default = {"addition": (11, 18), "subtraction": (0, 9), "mixed": (0, 18)}[mode]
     low = st.number_input("答えのいちばん小さい数", minimum, maximum, low_default, key="fc_min")
@@ -112,14 +112,15 @@ def advance_saved_card(state):
                  elapsed_sec=0, voice_failures=0)
 
 
-def queue_answer(state, answer, method, transcript, seconds):
+def queue_answer(state, answer, method, transcript, seconds, dont_know_used=False):
     index = state["index"]
     problem = state["cards"][index]
     count = st.session_state.setdefault("fc_attempt_counts", {}).get(problem["problem_id"], 0) + 1
     if state["selection_type"] == "retry":
         count = max(2, count)
     record = learning.make_attempt(problem, state["user_id"], state["session_id"], index + 1,
-                                   state["selection_type"], answer, seconds, count, round_size=len(state["cards"]))
+                                   state["selection_type"], answer, seconds, count, round_size=len(state["cards"]),
+                                   dont_know_used=dont_know_used)
     first = state["first_attempt_correct"][index]
     if first is None:
         first = next((row["first_attempt_correct"] for row in state["answers"]
@@ -159,6 +160,8 @@ def practice_screen():
     last = state["answers"][-1] if state["phase"] == "saved" else None
     event = keyboard(token=token, question_id=f"{state['session_id']}:{index}", phase=state["phase"],
                      question=problem["question_text"], correct=last["is_correct"] if last else None,
+                     dont_know_used=last.get("dont_know_used", False) if last else False,
+                     correct_answer=problem["correct_answer"] if last and last.get("dont_know_used") else None,
                      candidate=state["candidate"]["answer"] if state["candidate"] else None,
                      elapsed_sec=state["elapsed_sec"], voice_failures=state["voice_failures"],
                      previous_correct=(state["answers"][-1]["is_correct"]
@@ -198,6 +201,10 @@ def practice_screen():
         return
     if action == "back":
         goto("flashcard_settings")
+    if action == "dont_know":
+        state["voice_enabled"] = False
+        queue_answer(state, None, "keypad", None, seconds, dont_know_used=True)
+        st.rerun()
     if action not in ("answer", "recognition_failed"):
         return
     method = event.get("input_method", "voice" if action == "recognition_failed" else None)
@@ -232,6 +239,8 @@ def results_screen():
     summary = flashcards.summarize(state["answers"])
     st.subheader(f"{summary['count']}もん おわり！")
     st.metric("せいかい", f"{summary['correct']}もん せいかい")
+    if summary["dont_know"]:
+        st.caption(f"わからないを えらんだカード：{summary['dont_know']}もん。あとで もういちど やってみよう。")
     st.metric("へいきん", f"{summary['average_seconds']:.1f}びょう" if summary["count"] else "—")
     with st.expander("保護者向け：時間と回答の詳細"):
         st.write(f"正答率 {summary['rate']:.0%}" if summary["rate"] is not None else "まだ回答がありません。")
@@ -245,7 +254,8 @@ def results_screen():
     if not is_test_round(state, st.session_state):
         st.success("⭐ ごほうびスタンプを 1こ もらったよ！")
     mistakes = [(card, row) for card, row in zip(state["cards"], state["answers"]) if not row["is_correct"]]
-    if mistakes and st.button("まちがえたカードを もういちど", key="fc_retry", type="primary"):
+    retry_label = "まちがえた・わからなかったカードを もういちど" if summary["dont_know"] else "まちがえたカードを もういちど"
+    if mistakes and st.button(retry_label, key="fc_retry", type="primary"):
         start_round([card for card, _ in mistakes], state["answer_min"], state["answer_max"], state["order"],
                     "retry", [row["first_attempt_correct"] for _, row in mistakes], mode=state.get("mode", "addition"))
     if st.button("カードの設定へ", key="fc_settings"):
