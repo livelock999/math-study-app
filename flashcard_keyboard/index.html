@@ -10,6 +10,19 @@ button:disabled{opacity:.5;cursor:wait}.keys{display:grid;grid-template-columns:
 .keys button{font-size:24px;margin:4px;padding:10px 6px}.keys button:last-child{font-size:17px}.note{font-size:13px;line-height:1.6}.status{font-size:28px;font-weight:700}
 :focus-visible{outline:4px solid #e7a523;outline-offset:3px}.error{color:#a22b26;min-height:24px}
 .dont-know{display:block;margin:12px auto;background:#fff;color:#126e87;border:2px solid #126e87;min-width:180px}
+
+/* Compact layout keeps every answer control reachable without tiny touch targets. */
+.card{padding:10px 12px;border-radius:18px}
+.question{font-size:clamp(38px,9vw,60px);line-height:1.25;margin:4px 0 8px}
+input{display:block;margin:0 auto;padding:4px;min-height:52px;font-size:34px}
+.error:empty,.note:empty{display:none}.error{margin:4px 0;min-height:0}
+.keyboard-submit{display:none}
+.keys{gap:6px;margin:8px auto}.keys button{margin:0;min-height:48px;padding:5px 4px}
+.voice-controls{display:flex;gap:6px;max-width:360px;margin:8px auto}
+.voice-controls button{flex:1;min-width:0;margin:0;font-size:16px;padding:6px}
+.note{margin:6px 0;line-height:1.5}.status{margin:8px 0}
+.dont-know{margin:8px auto;min-height:44px;padding:6px;font-size:17px}
+.footer-actions{display:flex;gap:6px;margin:8px auto;max-width:360px}.footer-actions button{flex:1;min-width:0;margin:0;min-height:48px;font-size:17px;padding:6px}
 </style></head><body><div id="root"></div><script>
 const root=document.getElementById('root');
 let currentToken=null,shownAt=0,pending=false,currentArgs={},recognition=null,advanceTimer=null,focusTimers=[];
@@ -60,16 +73,17 @@ window.addEventListener('message',event=>{
   }else{
     if(args.previous_correct===true)card.append(paragraph('○ まえのカード せいかい','note'));
     if(args.voice_failures)card.append(paragraph('声をたしかめられませんでした。もういちど、またはテンキーで答えてね。'));
-    const input=document.createElement('input');input.id='answer';input.type='text';input.inputMode='numeric';input.maxLength=2;
+    const input=document.createElement('input');input.id='answer';input.type='text';input.inputMode='numeric';input.maxLength=3;
     input.readOnly=true;input.inputMode='none';
     input.autocomplete='off';input.setAttribute('aria-label','こたえ');
     const error=paragraph('','error');error.setAttribute('role','alert');
     function answer(){
-      if(!/^\d{1,2}$/.test(input.value)){error.textContent='すうじを いれてね';input.focus();return}
+      if(!/^\d{1,3}$/.test(input.value)){error.textContent='すうじを いれてね';input.focus();return}
       emit('answer',{answer:Number(input.value),input_method:inputMethod});
     }
-    input.oninput=()=>{inputMethod='keyboard';input.value=input.value.replace(/[０-９]/g,c=>String.fromCharCode(c.charCodeAt(0)-0xfee0)).replace(/[^0-9]/g,'').slice(0,2);error.textContent=''};
-    card.append(input,error,button('こたえる ↵',answer));
+    input.oninput=()=>{inputMethod='keyboard';input.value=input.value.replace(/[０-９]/g,c=>String.fromCharCode(c.charCodeAt(0)-0xfee0)).replace(/[^0-9]/g,'').slice(0,3);error.textContent=''};
+    const manualSubmit=button('こたえる ↵',answer);manualSubmit.className='keyboard-submit';
+    card.append(input,error,manualSubmit);
     const SpeechRecognition=window.SpeechRecognition||window.webkitSpeechRecognition;
     if(SpeechRecognition){
       const heard=paragraph('','note');heard.setAttribute('role','status');heard.setAttribute('aria-live','polite');card.append(heard);
@@ -111,9 +125,10 @@ window.addEventListener('message',event=>{
         };
         try{active.start()}catch(error){recognition=null;delivered=true;voiceEnabled=false;emit('recognition_failed',{input_method:'voice',recognized_text:''})}
       }
-      mic=button('🎤 こえで つづける',()=>startVoice(true));card.append(mic);
+      const voiceControls=document.createElement('div');voiceControls.className='voice-controls';card.append(voiceControls);
+      mic=button('🎤 こえで つづける',()=>startVoice(true));voiceControls.append(mic);
       const stop=button('こえを とめる',()=>{voiceEnabled=false;emit('voice_off')});
-      stop.disabled=!voiceEnabled;card.append(stop);
+      stop.disabled=!voiceEnabled;voiceControls.append(stop);
       if(voiceEnabled){
         voiceTimer=setTimeout(()=>startVoice(),0);
       }
@@ -123,12 +138,14 @@ window.addEventListener('message',event=>{
       keys.append(button(value,()=>{
         inputMethod='keypad';
         if(value==='こたえる'){answer();return}
-        input.value=value==='けす'?input.value.slice(0,-1):(input.value+value).slice(0,2);error.textContent='';input.focus();
+        input.value=value==='けす'?input.value.slice(0,-1):(input.value+value).slice(0,3);error.textContent='';input.focus();
       }));
     }
     const dontKnow=button('わからない',()=>{voiceEnabled=false;clearTimeout(voiceTimer);emit('dont_know')});
     dontKnow.className='dont-know';
-    card.append(keys,dontKnow,paragraph('わからないときは、答えを見てから次へ進めるよ。'),paragraph('声が数字として分からないときは採点しません。音声ファイルは保存しません。'),button('設定へ もどる',()=>{voiceEnabled=false;emit('back')}));
+    const footer=document.createElement('div');footer.className='footer-actions';
+    footer.append(dontKnow,button('設定へ もどる',()=>{voiceEnabled=false;emit('back')}));
+    card.append(keys,footer,paragraph('わからないときは、答えを見てから次へ進めるよ。'),paragraph('声が数字として分からないときは採点しません。音声ファイルは保存しません。'));
     input.onkeydown=event=>{
       if(pending||event.isComposing||event.ctrlKey||event.metaKey||event.altKey)return;
       if(/^[0-9０-９]$/.test(event.key)||['Backspace','Delete'].includes(event.key)){
