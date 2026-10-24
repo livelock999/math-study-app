@@ -329,7 +329,6 @@ def practice_screen():
                f"{ {'retry': 'もういちど れんしゅう', 'review': 'きょうの ふくしゅう', 'review_retry': 'ふくしゅうを もういちど'}.get(state['selection_type'], 'れんしゅう')}")
     st.progress(index / len(problems), text=f"{index + 1} / {len(problems)} もん")
     show_review_reasons(state)
-    show_problem_feedback(state, problem)
     # 保存失敗中は入力を確定したままにし、前回のコンポーネント値に頼らず再試行します。
     if state["pending_record"] is not None:
         st.subheader(problem["question_text"])
@@ -383,6 +382,7 @@ def practice_screen():
         hint_steps=math_hint_steps(problem), hint_level=draft["hint_level"],
         explanation_text=guidance(problem, reveal=True) if state["phase"] == "feedback" else None,
     )
+    show_problem_feedback(state, problem)
     # 古い画面から届いた値は無視し、保存後にだけ進行状態を変えます。
     if not isinstance(event, dict) or event.get("token") != token:
         return

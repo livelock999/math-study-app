@@ -146,7 +146,12 @@ begin
         if item->>'selection_type' not in ('normal','weak_area','retry','review','review_retry')
            or item->>'operation' not in ('addition','subtraction')
            or item->>'problem_format' not in ('calculation','word_problem','fill_blank','three_numbers','three_word_problem')
-           or (item->>'number_range')::integer not in (10,20)
+           or (item->>'number_range')::integer not in (10,20,200)
+           or ((item->>'number_range')::integer = 200 and
+               (item->>'learning_mode' is distinct from 'flashcard'
+                or item->>'problem_format' is distinct from 'calculation'
+                or (item->>'left_operand')::integer > 100
+                or (item->>'right_operand')::integer > 100))
            or (item->>'left_operand')::integer not between 0 and (item->>'number_range')::integer
            or (item->>'right_operand')::integer not between 0 and (item->>'number_range')::integer
            or (item->>'correct_answer')::integer not between 0 and (item->>'number_range')::integer
@@ -212,7 +217,9 @@ begin
            or item->>'input_method' not in ('voice','keyboard','keypad')
            or ((item->>'answer_range_min' is null) <> (item->>'answer_range_max' is null))
            or (item->>'answer_range_min')::integer < 0
-           or (item->>'answer_range_max')::integer > 20
+           or (item->>'answer_range_max')::integer >
+              (case when item->>'learning_mode' = 'flashcard' and (item->>'number_range')::integer = 200
+                    then 200 else 20 end)
            or (item->>'answer_range_min')::integer > (item->>'correct_answer')::integer
            or (item->>'answer_range_max')::integer < (item->>'correct_answer')::integer
            or (item->>'recognition_retry_count')::integer < 0
@@ -228,7 +235,7 @@ begin
                or item->'recognition_success' is distinct from 'true'::jsonb
                or item->'parsed_answer' is distinct from item->'user_answer'
                or item->'parsed_answer' = 'null'::jsonb
-               or (item->>'parsed_answer')::integer not between 0 and 99
+               or (item->>'parsed_answer')::integer not between 0 and 999
                or item->'recognition_retry_count' = 'null'::jsonb then
                 raise exception 'invalid accepted voice recognition';
             end if;
@@ -239,7 +246,7 @@ begin
         end if;
         if item->>'learning_mode' = 'flashcard'
            and (item->>'problem_format' <> 'calculation' or item->>'input_method' is null
-                or (item->>'user_answer')::integer not between 0 and 99) then
+                or (item->>'user_answer')::integer not between 0 and 999) then
             raise exception 'invalid flashcard format or input method';
         end if;
         math_row := jsonb_populate_record(null::public.math_attempts, item);

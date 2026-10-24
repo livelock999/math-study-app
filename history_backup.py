@@ -114,14 +114,18 @@ def _math_record(record, user_id):
         raise ValueError("算数の回答順または回答回数が不正です。")
     if normalized["hint_level"] is not None and not 0 <= normalized["hint_level"] <= 3:
         raise ValueError("算数のヒント段階が不正です。")
+    extended_card = (normalized["number_range"] == 200
+                     and normalized.get("learning_mode") == "flashcard"
+                     and normalized["problem_format"] == "calculation")
     if (normalized["selection_type"] not in ("normal", "weak_area", "retry", "review", "review_retry")
             or normalized["problem_format"] not in ("calculation", "word_problem", "fill_blank", "three_numbers", "three_word_problem")
             or normalized["operation"] not in ("addition", "subtraction")
-            or normalized["number_range"] not in (10, 20)):
+            or (normalized["number_range"] not in (10, 20) and not extended_card)):
         raise ValueError("算数の問題設定が不正です。")
     left, right, limit = normalized["left_operand"], normalized["right_operand"], normalized["number_range"]
     base_result = left + right if normalized["operation"] == "addition" else left - right
-    if not (0 <= left <= limit and 0 <= right <= limit and 0 <= base_result <= limit):
+    operand_limit = 100 if extended_card else limit
+    if not (0 <= left <= operand_limit and 0 <= right <= operand_limit and 0 <= base_result <= limit):
         raise ValueError("算数の数量または正しい答えが不正です。")
     expected = base_result
     if normalized["problem_format"] in ("three_numbers", "three_word_problem"):
@@ -170,8 +174,9 @@ def _flashcard_metadata(row):
     if method is not None and method not in ("voice", "keyboard", "keypad"):
         raise ValueError("算数の入力方法が不正です。")
     lower, upper = row.get("answer_range_min"), row.get("answer_range_max")
+    range_limit = 200 if mode == "flashcard" and row["number_range"] == 200 else 20
     if (lower is None) != (upper is None) or (lower is not None and
-            not 0 <= lower <= row["correct_answer"] <= upper <= 20):
+            not 0 <= lower <= row["correct_answer"] <= upper <= range_limit):
         raise ValueError("計算カードの答えの範囲が不正です。")
     retries, total = row.get("recognition_retry_count"), row.get("total_recognition_retry_count")
     if (retries is not None and retries < 0) or (total is not None and total < 0):
@@ -190,15 +195,15 @@ def _flashcard_metadata(row):
     if method == "voice":
         if (not row.get("recognized_text") or row.get("recognition_success") is not True
                 or row.get("parsed_answer") is None
-                or not 0 <= row["parsed_answer"] <= 99
+                or not 0 <= row["parsed_answer"] <= 999
                 or row.get("parsed_answer") != row["user_answer"] or retries is None):
             raise ValueError("音声回答の認識結果が不正です。")
     elif any(row.get(name) is not None for name in voice_fields):
         raise ValueError("音声以外の回答には音声認識結果を設定できません。")
     if mode == "flashcard" and (row["problem_format"] != "calculation" or method is None):
         raise ValueError("計算カードの問題形式または入力方法が不正です。")
-    if mode == "flashcard" and row["user_answer"] is not None and not 0 <= row["user_answer"] <= 99:
-        raise ValueError("計算カードの回答は0〜99の整数です。")
+    if mode == "flashcard" and row["user_answer"] is not None and not 0 <= row["user_answer"] <= 999:
+        raise ValueError("計算カードの回答は0〜999の整数です。")
 
 
 def _japanese_record(record, user_id):

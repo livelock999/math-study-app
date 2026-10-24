@@ -25,8 +25,9 @@ def open_screen(screen, origin="settings"):
 
 
 def start_round(cards, answer_min=11, answer_max=18, order="shuffle", selection_type="normal", first_attempt_correct=None,
-                mode="addition"):
-    if not cards or selection_type not in ("normal", "retry") or mode not in ("addition", "subtraction", "mixed"):
+                mode="addition", operand_max=None):
+    if (not cards or selection_type not in ("normal", "retry") or mode not in ("addition", "subtraction", "mixed")
+            or not (operand_max is None or type(operand_max) is int and operand_max == 100)):
         raise ValueError("カードのセットが不正です。")
     if selection_type == "normal":
         st.session_state.fc_attempt_counts = {}
@@ -37,15 +38,25 @@ def start_round(cards, answer_min=11, answer_max=18, order="shuffle", selection_
         "voice_failures": 0, "total_voice_failures": 0, "elapsed_sec": 0, "session_elapsed_sec": 0,
         "started_at": time.monotonic(), "voice_enabled": False,
         "answer_min": answer_min, "answer_max": answer_max, "order": order,
-        "mode": mode,
+        "mode": mode, "operand_max": operand_max,
         "selection_type": selection_type, "first_attempt_correct": list(first_attempt_correct or [None] * len(cards)),
     }
     goto("flashcard_practice")
 
 
+def answer_settings(mode, operand_max):
+    """答えの入力上限と初期範囲を、選んだカードに合わせます。"""
+    if operand_max == 100:
+        maximum = 100 if mode == "subtraction" else 200
+        return 0, maximum, 0, maximum
+    minimum, maximum = (2, 18) if mode == "addition" else (0, 19)
+    low, high = {"addition": (11, 18), "subtraction": (0, 9), "mixed": (0, 18)}[mode]
+    return minimum, maximum, low, high
+
+
 def reset_mode_range():
-    """別の演算の答え範囲を引き継がず、それぞれの初期範囲に戻します。"""
-    low, high = {"addition": (11, 18), "subtraction": (0, 9), "mixed": (0, 18)}[st.session_state.fc_mode]
+    """演算や数の範囲を変えたら、有効な答え範囲に戻します。"""
+    _, _, low, high = answer_settings(st.session_state.fc_mode, st.session_state.get("fc_operand_max"))
     st.session_state.fc_min = low
     st.session_state.fc_max = high
     if st.session_state.fc_mode == "mixed":
@@ -58,15 +69,23 @@ def settings_screen():
                     format_func=lambda value: {"addition": "たし算", "subtraction": "ひき算",
                                                "mixed": "たし算・ひき算ミックス"}[value],
                     key="fc_mode", on_change=reset_mode_range)
+    operand_max = st.radio("数の範囲", [None, 100],
+                           format_func=lambda value: "100までの数" if value == 100 else "これまでのカード",
+                           key="fc_operand_max", on_change=reset_mode_range, horizontal=True)
     descriptions = {
         "addition": "1〜9どうしの たし算。答えは2〜18から選べます。",
         "subtraction": "20までの数から1〜9をひく ひき算。答えは0〜19で、マイナスにはなりません。",
         "mixed": "たし算とひき算をほぼ半分ずつ、シャッフルで出します。両方のカードがある答え範囲を選んでね。",
     }
+    if operand_max == 100:
+        descriptions = {
+            "addition": "0〜100どうしの たし算。答えは0〜200から選べます。",
+            "subtraction": "0〜100どうしの ひき算。答えは0〜100で、マイナスにはなりません。",
+            "mixed": "0〜100どうしの たし算・ひき算をほぼ半分ずつ、シャッフルで出します。答えは0〜200から選べます。",
+        }
     st.caption(descriptions[mode])
     st.caption("答えを声・数字キー・テンキーで回答すると、自動で次へ進みます。わからないときは答えを見てから次へ進めます。")
-    minimum, maximum = (2, 18) if mode == "addition" else (0, 19)
-    low_default, high_default = {"addition": (11, 18), "subtraction": (0, 9), "mixed": (0, 18)}[mode]
+    minimum, maximum, low_default, high_default = answer_settings(mode, operand_max)
     low = st.number_input("答えのいちばん小さい数", minimum, maximum, low_default, key="fc_min")
     high = st.number_input("答えのいちばん大きい数", minimum, maximum, high_default, key="fc_max")
     count = st.select_slider("カードの数", [5, 10, 20, 30, 50], value=20, key="fc_count")
@@ -74,14 +93,16 @@ def settings_screen():
                      horizontal=True, key="fc_order", disabled=mode == "mixed")
     if mode == "mixed":
         order = "shuffle"
-    error = "小さい数を、大きい数以下にしてください。" if low > high else flashcards.selection_error(low, high, count, order, mode)
+    error = ("小さい数を、大きい数以下にしてください。" if low > high
+             else flashcards.selection_error(low, high, count, order, mode, operand_max))
     if error:
         st.info(error)
     st.caption("狭い範囲では同じカードを繰り返します。声が数として分からないときは採点しません。")
     st.caption("音声ファイルは保存しません。ブラウザーの音声認識サービスが音声を処理する場合があります。"
                "対応状況は端末・ブラウザーで異なり、使えない場合はテンキーで回答できます。")
     if st.button("カード スタート", key="fc_start", type="primary", disabled=error is not None, use_container_width=True):
-        start_round(flashcards.generate_cards(low, high, count, order, mode), low, high, order, mode=mode)
+        start_round(flashcards.generate_cards(low, high, count, order, mode, operand_max),
+                    low, high, order, mode=mode, operand_max=operand_max)
     if st.button("もどる", key="fc_back"):
         goto("settings")
 
@@ -223,7 +244,7 @@ def practice_screen():
             st.rerun()
     elif method in ("keyboard", "keypad"):
         answer = event.get("answer")
-        if type(answer) is not int or not 0 <= answer <= 99:
+        if type(answer) is not int or not 0 <= answer <= 999:
             return
         transcript = None
     else:
@@ -257,7 +278,8 @@ def results_screen():
     retry_label = "まちがえた・わからなかったカードを もういちど" if summary["dont_know"] else "まちがえたカードを もういちど"
     if mistakes and st.button(retry_label, key="fc_retry", type="primary"):
         start_round([card for card, _ in mistakes], state["answer_min"], state["answer_max"], state["order"],
-                    "retry", [row["first_attempt_correct"] for _, row in mistakes], mode=state.get("mode", "addition"))
+                    "retry", [row["first_attempt_correct"] for _, row in mistakes], mode=state.get("mode", "addition"),
+                    operand_max=state.get("operand_max"))
     if st.button("カードの設定へ", key="fc_settings"):
         goto("flashcard_settings")
     if st.button("保護者のカードレポート", key="fc_report_results"):

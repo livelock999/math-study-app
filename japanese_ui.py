@@ -274,7 +274,6 @@ def practice():
         st.caption("きょうの ふくしゅう" if state["selection"] == "review" else "ふくしゅうを もういちど")
     st.progress(index / len(state["questions"]), text=f"{index + 1} / {len(state['questions'])} もん")
     show_review_reasons(state)
-    show_problem_feedback(state, question)
     if state["pending"] is not None:
         st.write(question["text"])
         st.write(question["question"])
@@ -299,6 +298,7 @@ def practice():
                      last=index + 1 == len(state["questions"]), key="jp_keyboard", default=None,
                      draft=state.get("draft", {}), furigana=READINGS,
                      **component_display("japanese", question, st.session_state.user_id))
+    show_problem_feedback(state, question)
     # 問題中にiframeを破棄するとヒントと計測開始が消えるため、移動は回答保存後に限ります。
     if state["phase"] == "feedback":
         navigation("jp_practice")
