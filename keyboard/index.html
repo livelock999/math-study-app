@@ -89,6 +89,34 @@
       button { padding: 14px 12px; }
     }
     @media (prefers-reduced-motion: reduce) { button { transition: none; } }
+
+    /* Compact answer screen: keep touch targets, remove repeated controls and empty gaps. */
+    body { padding: 2px 2px 6px; }
+    .card { padding: 12px; border-radius: 18px; }
+    .question { font-size: clamp(34px,8vw,48px); line-height: 1.3; margin-bottom: 10px; padding: 8px; }
+    .story { line-height: 1.65; padding: 12px; margin-bottom: 10px; }
+    label { font-size: 17px; line-height: 1.4; margin-bottom: 4px; }
+    input { min-height: 54px; padding: 4px; font-size: 34px; width: 140px; border-radius: 12px; }
+    .error:empty { display: none; }
+    .error { margin: 4px 0; }
+    .number-keypad { gap: 6px; margin: 10px auto; }
+    .number-keypad button { min-height: 48px; padding: 5px 4px; }
+    .keyboard-submit { display: none; }
+    button { min-height: 48px; margin-top: 8px; padding: 9px 12px; font-size: 20px; }
+    .support-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+    .support-actions:empty { display: none; }
+    .support-actions button { flex: 1 1 80px; margin: 0; min-width: 0; font-size: 15px; padding: 6px; line-height: 1.3; }
+    .card > label { display: inline-block; vertical-align: middle; margin: 0 8px 0 0; }
+    .card > input { vertical-align: middle; }
+    .navigation { margin-top: 8px; padding-top: 8px; gap: 6px; }
+    .navigation button { min-height: 44px; padding: 6px; font-size: 15px; }
+    .help { font-size: 12px; line-height: 1.5; margin-top: 8px; }
+    .equation-editor { margin: 10px auto; }
+    .operator-options { gap: 6px; margin-top: 6px; }
+    .operator-options button { min-height: 44px; padding: 5px; font-size: 17px; }
+    .equation-editor.three label { font-size: 13px; }
+    .guidance { margin-top: 10px; padding: 12px; }
+    @media(pointer:coarse) { .help { display: none; } }
   </style>
 </head>
 <body>
@@ -133,6 +161,7 @@
     function numberKeypad(fields, actionButton, error) {
       const keys = document.createElement('div'); keys.className = 'number-keypad';
       let target = fields[0];
+      actionButton.className = 'keyboard-submit';
       const next = document.createElement('button'); next.type = 'button';
       function select(input) {
         target = input;
@@ -466,12 +495,13 @@
         card.append(feedback, detail, button);
         focusInitial(button);
       }
+      const tools = document.createElement('div'); tools.className = 'support-actions'; card.append(tools);
       // 新しいPython側が準備できているときだけ、途中状態を同期する補助操作を表示します。
       if (args.visual_available && !args.visual_visible) {
         const showPicture = document.createElement('button'); showPicture.type = 'button';
         showPicture.className = 'visual-toggle';
         renderText(showPicture, args.phase === 'feedback' ? 'ずで たしかめる' : 'ずを みる');
-        showPicture.onclick = () => submit('show_visual'); card.append(showPicture);
+        showPicture.onclick = () => submit('show_visual'); tools.append(showPicture);
       }
       if (typeof args.hint_text === 'string') {
         if (args.phase !== 'feedback') {
@@ -484,18 +514,18 @@
             const hintButton = document.createElement('button'); hintButton.type = 'button';
             renderText(hintButton, !args.hint_visible ? 'ヒントを みる'
               : (Number(args.hint_level) || 0) < 2 ? 'もうすこし ヒント' : 'ときかたの ヒント');
-            hintButton.onclick = () => submit('show_hint'); card.append(hintButton);
+            hintButton.onclick = () => submit('show_hint'); tools.append(hintButton);
           }
           const unknown = document.createElement('button'); unknown.type = 'button';
           renderText(unknown, 'わからない'); unknown.style.background = '#536d7b';
-          unknown.onclick = () => submit('dont_know'); card.append(unknown);
+          unknown.onclick = () => submit('dont_know'); tools.append(unknown);
         } else if (args.explanation_visible) {
           const explanation = document.createElement('p'); explanation.className = 'guidance';
           renderText(explanation, args.explanation_text, 'explanation_text'); card.append(explanation);
         } else {
           const explanationButton = document.createElement('button'); explanationButton.type = 'button';
           renderText(explanationButton, 'かんがえかた'); explanationButton.onclick = () => submit('show_explanation');
-          card.append(explanationButton);
+          tools.append(explanationButton);
         }
         const navigation = document.createElement('div'); navigation.className = 'navigation';
         for (const [label, action] of [['もどる', 'pause'], ['学習履歴', 'open_history']]) {
