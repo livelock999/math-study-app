@@ -68,10 +68,18 @@ def apply_theme():
     }
     @media(prefers-reduced-motion:reduce) { * { transition: none !important; } }
     @media(max-width:360px) { .study-card-heading h3 { font-size: 1.05rem !important; } }
+    .study-brand--compact { font-size: 16px; font-weight: 700; margin: 0; line-height: 1.4; }
+    [data-testid="stMainBlockContainer"]:has(.study-brand--compact) { padding-top: calc(4rem + env(safe-area-inset-top,0px)); padding-bottom: 1rem; }
+    [data-testid="stMainBlockContainer"]:has(.study-brand--compact) > [data-testid="stVerticalBlock"] { gap: .5rem; }
+    [data-testid="stMainBlockContainer"]:has(.study-brand--compact) [data-testid="stProgress"] p { margin-bottom: 4px; }
+    @media(max-height:740px) { [data-testid="stMarkdown"]:has(.study-brand--compact) { display: none; } }
     </style>""", unsafe_allow_html=True)
 
 
 def brand():
+    if st.session_state.get("screen") in ("practice", "jp_practice", "flashcard_practice"):
+        st.markdown('<div class="study-brand study-brand--compact" role="heading" aria-level="1">📚 れんしゅう</div>', unsafe_allow_html=True)
+        return
     st.markdown('<div class="study-brand"><span class="study-brand-icon" aria-hidden="true">📚</span>'
                 '<div><div role="heading" aria-level="1" class="study-title"><span class="study-brand-title">さんすう・こくご</span> '
                 '<span class="study-brand-title">れんしゅう</span></div><p>すこしずつ、できた！を ふやそう。</p></div></div>',

@@ -83,6 +83,121 @@ class FlashcardUIAppTests(unittest.TestCase):
         self.app.select_slider(key='fc_count').set_value(5).run()
         self.assertFalse(self.app.exception)
 
+    def configure_hundred_mode(self, mode='addition', lower=None, upper=None):
+        self.app.session_state.screen = 'flashcard_settings'
+        self.app.run()
+        self.app.radio(key='fc_mode').set_value(mode).run()
+        self.app.radio(key='fc_operand_max').set_value(100).run()
+        if lower is not None:
+            self.app.number_input(key='fc_min').set_value(lower).run()
+        if upper is not None:
+            self.app.number_input(key='fc_max').set_value(upper).run()
+        self.app.select_slider(key='fc_count').set_value(5).run()
+        self.assertFalse(self.app.exception)
+
+    def test_hundred_range_defaults_and_return_to_legacy_cards(self):
+        for mode, bounds in (('addition', (0, 200)), ('subtraction', (0, 100)), ('mixed', (0, 200))):
+            self.configure_hundred_mode(mode)
+            self.assertEqual((self.app.number_input(key='fc_min').value, self.app.number_input(key='fc_max').value), bounds)
+            self.assertFalse(self.app.button(key='fc_start').disabled)
+        self.app.radio(key='fc_operand_max').set_value(None).run()
+        self.assertEqual((self.app.number_input(key='fc_min').value, self.app.number_input(key='fc_max').value), (0, 18))
+        self.assertFalse(self.app.button(key='fc_start').disabled)
+        self.click('fc_start')
+        state = self.app.session_state.fc_round
+        self.assertIsNone(state['operand_max'])
+        self.assertTrue(all(card['number_range'] == 20 for card in state['cards']))
+
+    def test_hundred_addition_200_and_three_digit_wrong_answer_retry_keep_initial_record(self):
+        self.configure_hundred_mode('addition', 200, 200)
+        self.click('fc_start')
+        state = self.app.session_state.fc_round
+        self.assertEqual(state['operand_max'], 100)
+        self.assertTrue(all((card['left_operand'], card['right_operand'], card['correct_answer']) == (100, 100, 200)
+                            for card in state['cards']))
+        self.event('answer', input_method='keyboard', answer=999)
+        first = deepcopy(self.rows()[0])
+        self.assertFalse(first['is_correct'])
+        self.assertFalse(first['first_attempt_correct'])
+        self.event('next')
+        for _ in range(4):
+            self.answer(method='keypad')
+            self.event('next')
+        self.assertEqual(self.app.session_state.screen, 'flashcard_results')
+        self.click('fc_retry')
+        retry_state = self.app.session_state.fc_round
+        self.assertEqual(retry_state['operand_max'], 100)
+        self.assertEqual((retry_state['answer_min'], retry_state['answer_max']), (200, 200))
+        self.answer(method='keypad')
+        retry = next(row for row in self.rows() if row['selection_type'] == 'retry')
+        self.assertEqual((retry['user_answer'], retry['number_range']), (200, 200))
+        self.assertTrue(retry['is_correct'])
+        self.assertFalse(retry['first_attempt_correct'])
+        self.assertGreater(retry['attempt_count'], first['attempt_count'])
+        self.assertNotEqual(retry['attempt_id'], first['attempt_id'])
+        self.assertIn(first, self.rows())
+
+    def test_hundred_subtraction_zero_and_stop_preserve_only_submitted_answer(self):
+        self.configure_hundred_mode('subtraction', 0, 0)
+        self.click('fc_start')
+        state = self.app.session_state.fc_round
+        state['cards'][0] = next(card for card in flashcards.card_pool('subtraction', 0, 0, 100)
+                                 if card['left_operand'] == card['right_operand'] == 100)
+        self.answer(method='keypad')
+        row = self.rows()[0]
+        self.assertEqual((row['left_operand'], row['right_operand'], row['user_answer']), (100, 100, 0))
+        self.assertTrue(row['is_correct'])
+        self.event('next')
+        self.event('back')
+        self.assertEqual(self.app.session_state.screen, 'flashcard_settings')
+        self.assertEqual(len(self.rows()), 1)
+        self.assertEqual(state['index'], 1)
+        self.assertFalse(row['round_completed'])
+
+    def test_hundred_mixed_starts_with_both_operations_and_operand_bound(self):
+        self.configure_hundred_mode('mixed')
+        self.click('fc_start')
+        state = self.app.session_state.fc_round
+        self.assertEqual(state['operand_max'], 100)
+        self.assertEqual({card['operation'] for card in state['cards']}, {'addition', 'subtraction'})
+        self.assertTrue(all(0 <= card['left_operand'] <= 100 and 0 <= card['right_operand'] <= 100
+                            and card['number_range'] == 200 for card in state['cards']))
+
+    def test_hundred_voice_200_save_retry_and_unparsed_speech_never_advance_early(self):
+        self.configure_hundred_mode('addition', 200, 200)
+        self.click('fc_start')
+        state = self.app.session_state.fc_round
+        self.event('answer', input_method='voice', recognized_text='たぶんにひゃく', voice_enabled=True)
+        self.assertEqual(self.rows(), [])
+        self.assertEqual((state['index'], state['voice_failures']), (0, 1))
+        self.lost = True
+        old = self.event('answer', input_method='voice', recognized_text='２００', voice_enabled=True)
+        pending = deepcopy(state['pending'])
+        self.assertEqual((state['index'], len(state['answers'])), (0, 0))
+        self.assertEqual(len(self.rows()), 1)
+        self.assertEqual(pending['parsed_answer'], 200)
+        self.assertEqual(pending['recognition_retry_count'], 1)
+        self.event('answer', input_method='keypad', answer=200)
+        self.assertEqual(state['pending'], pending)
+        self.assertEqual(state['index'], 0)
+        self.click('fc_retry_save')
+        self.assertEqual((state['index'], len(state['answers'])), (1, 1))
+        self.keyboard.return_value = old
+        self.app.run()
+        self.keyboard.return_value = None
+        self.assertEqual(len(self.rows()), 1)
+        self.assertEqual(self.rows()[0]['attempt_id'], pending['attempt_id'])
+
+    def test_legacy_cards_accept_three_digit_wrong_answer_and_reject_four_digits(self):
+        self.event('answer', input_method='keyboard', answer=1000)
+        self.assertEqual(self.rows(), [])
+        self.assertEqual(self.app.session_state.fc_round['index'], 0)
+        self.event('answer', input_method='keypad', answer=200)
+        row = self.rows()[0]
+        self.assertEqual(row['user_answer'], 200)
+        self.assertEqual(row['number_range'], 20)
+        self.assertFalse(row['is_correct'])
+
     def test_mode_switch_resets_ranges_and_invalid_mixed_range_disables_start(self):
         for mode, lower, upper in (('subtraction', 0, 9), ('mixed', 0, 18), ('addition', 11, 18)):
             self.configure_mode(mode)
@@ -258,7 +373,7 @@ class FlashcardUIAppTests(unittest.TestCase):
         self.assertEqual(len(self.app.session_state.fc_round['answers']), 1)
 
     def test_invalid_events_and_changed_user_cannot_save(self):
-        for data in ({'answer': True}, {'answer': 100}, {'answer': 13, 'response_time_sec': float('nan')},
+        for data in ({'answer': True}, {'answer': 1000}, {'answer': 13, 'response_time_sec': float('nan')},
                      {'answer': 13, 'response_time_sec': -1}):
             self.event('answer', input_method='keyboard', **data)
         self.assertEqual(self.rows(), [])

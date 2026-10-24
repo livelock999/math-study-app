@@ -26,7 +26,69 @@ def roundtrip(row):
     return backup.parse_backup(backup.export_backup("user_001", [row], []), "user_001")
 
 
+def extended_record(operation='addition', left=100, right=100, answer=None, method='voice'):
+    problem = learning.make_problem(operation, 200, left, right)
+    answer = problem['correct_answer'] if answer is None else answer
+    row = learning.make_attempt(problem, 'user_001', 'expanded-session', 1, 'normal', answer, 2, 1)
+    row.update(learning_mode='flashcard', answer_range_min=0, answer_range_max=200,
+               input_method=method, recognized_text=str(answer) if method == 'voice' else None,
+               parsed_answer=answer if method == 'voice' else None,
+               recognition_success=True if method == 'voice' else None,
+               recognition_retry_count=0, total_recognition_retry_count=0,
+               first_attempt_correct=row['is_correct'], session_elapsed_sec=2)
+    return row
+
+
 class CardBackupTests(unittest.TestCase):
+    def test_expanded_cards_save_export_and_restore_preserve_200_zero_and_recognized_error(self):
+        rows = [extended_record(), extended_record('addition', 0, 0),
+                extended_record('subtraction', 100, 0), extended_record('subtraction', 100, 100),
+                extended_record(answer=999), extended_record(method='keypad'), record()]
+        with TemporaryDirectory() as folder:
+            source = Path(folder) / 'source.sqlite3'
+            target = Path(folder) / 'restored.sqlite3'
+            jp_path = Path(folder) / 'jp.sqlite3'
+            learning.init_db(source)
+            learning.init_db(target)
+            japanese.init_db(jp_path)
+            for row in rows:
+                learning.save_attempt(row, source)
+            saved, _ = learning.read_attempts('user_001', path=source)
+            data = backup.export_backup('user_001', saved, [])
+            imported = backup.parse_backup(data, 'user_001')
+            self.assertEqual(backup.restore_backup(imported, math_path=target, japanese_path=jp_path)['math_added'], 7)
+            self.assertEqual(backup.restore_backup(imported, math_path=target, japanese_path=jp_path)['math_existing'], 7)
+            actual, _ = learning.read_attempts('user_001', path=target)
+            self.assertEqual({r['attempt_id']: r for r in actual}, {r['attempt_id']: r for r in saved})
+            self.assertIn(200, [r['correct_answer'] for r in actual])
+            wrong = next(r for r in actual if r['user_answer'] == 999)
+            self.assertEqual(wrong['parsed_answer'], 999)
+            self.assertFalse(wrong['is_correct'])
+
+    def test_range_200_is_restricted_to_calculation_flashcards(self):
+        invalid = ({'learning_mode': 'normal'}, {'learning_mode': None}, {'learning_mode': 'retry'},
+                   {'problem_format': 'word_problem'}, {'problem_format': 'fill_blank'},
+                   {'problem_format': 'three_numbers'}, {'problem_format': 'three_word_problem'},
+                   {'number_range': 201}, {'number_range': 100})
+        for fields in invalid:
+            with self.subTest(fields=fields), self.assertRaises(ValueError):
+                roundtrip({**extended_record(), **fields})
+
+    def test_expanded_cards_reject_operands_over_100_negative_results_and_invalid_ranges(self):
+        invalid = ({'left_operand': 101, 'right_operand': 0, 'correct_answer': 101},
+                   {'left_operand': 0, 'right_operand': 101, 'correct_answer': 101},
+                   {'left_operand': -1, 'right_operand': 2, 'correct_answer': 1},
+                   {'operation': 'subtraction', 'left_operand': 0, 'right_operand': 1, 'correct_answer': -1},
+                   {'correct_answer': 199}, {'answer_range_max': 201}, {'answer_range_min': 201},
+                   {'answer_range_min': None}, {'user_answer': 1000, 'parsed_answer': 1000},
+                   {'user_answer': -1, 'parsed_answer': -1}, {'parsed_answer': 199},
+                   {'parsed_answer': True})
+        for fields in invalid:
+            with self.subTest(fields=fields), self.assertRaises(ValueError):
+                roundtrip({**extended_record(), **fields})
+        with self.assertRaises(ValueError):
+            roundtrip(record(answer_range_max=200))  # Existing 10/20 records keep their range.
+
     def test_subtraction_zero_and_mixed_session_roundtrip_without_new_columns(self):
         records = []
         for index, (operation, left, right, method) in enumerate((('subtraction', 5, 5, 'voice'),
@@ -70,19 +132,20 @@ class CardBackupTests(unittest.TestCase):
         for name in learning.FLASHCARD_COLUMNS:
             self.assertIsNone(restored[name], name)
 
-    def test_normal_three_digit_error_preserved_but_card_and_voice_are_two_digits(self):
+    def test_three_digit_errors_preserved_for_normal_voice_and_keypad_answers(self):
         row = learning.make_attempt(learning.make_problem("addition", 10, 2, 3),
                                     "user_001", "normal_session", 1, "normal", 999, 2.5, 1)
         result = roundtrip(row)["math"][0]
         self.assertEqual(result["user_answer"], 999)
         self.assertIs(result["first_attempt_correct"], False)
-        with self.assertRaises(ValueError):
-            roundtrip(record(user_answer=999, parsed_answer=999, is_correct=False,
-                             first_attempt_correct=False))
-        with self.assertRaises(ValueError):
-            roundtrip(record(input_method="keypad", recognized_text=None, parsed_answer=None,
-                             recognition_success=None, user_answer=999, is_correct=False,
-                             first_attempt_correct=False))
+        voice = roundtrip(record(user_answer=999, parsed_answer=999, is_correct=False,
+                                 first_attempt_correct=False))['math'][0]
+        self.assertEqual(voice['parsed_answer'], 999)
+        keypad = roundtrip(record(input_method="keypad", recognized_text=None, parsed_answer=None,
+                                 recognition_success=None, user_answer=999, is_correct=False,
+                                 first_attempt_correct=False))['math'][0]
+        self.assertEqual(keypad['user_answer'], 999)
+        self.assertIsNone(keypad['parsed_answer'])
 
     def test_voice_metadata_and_semantic_corruption_rejected(self):
         changes = ({"recognition_success": False}, {"recognition_success": 2},

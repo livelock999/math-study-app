@@ -175,7 +175,110 @@ class FlashcardTests(unittest.TestCase):
                                  ('ジュウサン', 13), ('3', 3), ('さん', 3), ('零', 0), ('99', 99)]:
             with self.subTest(phrase=phrase):
                 self.assertEqual(flashcards.parse_spoken_number(phrase), expected)
-        for phrase in ('', '13か3', '13 3', 'わからない', 'たぶん13', '-3', '1.3', '100'):
+        for phrase in ('', '13か3', '13 3', 'わからない', 'たぶん13', '-3', '1.3', '1000'):
+            with self.subTest(phrase=phrase):
+                self.assertIsNone(flashcards.parse_spoken_number(phrase))
+
+    def test_extended_addition_pool_includes_zero_and_two_hundreds_without_legacy_id_collision(self):
+        pool = flashcards.card_pool('addition', 0, 200, operand_max=100)
+        self.assertEqual(len(pool), 101 * 101)
+        pairs = {(p['left_operand'], p['right_operand']): p for p in pool}
+        self.assertEqual(set(pairs), {(left, right) for left in range(101) for right in range(101)})
+        self.assertEqual((pairs[0, 0]['correct_answer'], pairs[100, 100]['correct_answer']), (0, 200))
+        self.assertTrue(all(p['number_range'] == 200 and p['correct_answer'] == p['left_operand'] + p['right_operand'] for p in pool))
+        self.assertTrue(pairs[0, 100]['zero_included'])
+        self.assertNotEqual(pairs[9, 4]['problem_id'], learning.make_problem('addition', 20, 9, 4)['problem_id'])
+        cards = flashcards.generate_cards(200, 200, 5, 'ordered', 'addition', 100)
+        self.assertTrue(all(p['left_operand'] == p['right_operand'] == 100 for p in cards))
+
+    def test_extended_subtraction_pool_is_nonnegative_and_covers_all_zero_to_hundred_operands(self):
+        pool = flashcards.card_pool('subtraction', 0, 200, 100)
+        self.assertEqual(len(pool), 101 * 102 // 2)
+        pairs = {(p['left_operand'], p['right_operand']) for p in pool}
+        self.assertIn((0, 0), pairs)
+        self.assertIn((100, 0), pairs)
+        self.assertIn((100, 100), pairs)
+        self.assertTrue(all(0 <= p['correct_answer'] <= 100 and p['correct_answer'] == p['left_operand'] - p['right_operand'] for p in pool))
+        self.assertTrue(all(p['number_range'] == 200 and p['carry'] is None for p in pool))
+        for mode in ('subtraction', 'mixed'):
+            self.assertIsNotNone(flashcards.selection_error(101, 200, mode=mode, operand_max=100))
+            with self.assertRaises(ValueError):
+                flashcards.generate_cards(101, 200, mode=mode, operand_max=100)
+
+    def test_extended_mixed_generation_balances_shuffles_and_avoids_adjacent_duplicates(self):
+        sequences = set()
+        for seed in (1, 2, 3):
+            for lower, upper in ((0, 0), (0, 200), (100, 100)):
+                random.seed(seed)
+                cards = flashcards.generate_cards(lower, upper, 21, 'ordered', 'mixed', 100)
+                additions = sum(p['operation'] == 'addition' for p in cards)
+                self.assertIn(additions, (10, 11))
+                self.assertTrue(all(lower <= p['correct_answer'] <= upper for p in cards))
+                self.assertTrue(all(a['problem_id'] != b['problem_id'] for a, b in zip(cards, cards[1:])))
+                if upper == 200:
+                    self.assertEqual(len({p['problem_id'] for p in cards}), 21)
+                    sequences.add(tuple(p['problem_id'] for p in cards))
+        self.assertGreater(len(sequences), 1)
+        with self.assertRaises(ValueError):
+            flashcards.generate_cards(0, 200, 1, mode='mixed', operand_max=100)
+
+    def test_extended_boundaries_and_legacy_defaults_remain_distinct(self):
+        for invalid in (True, False, 99, 101, 100.0, '100'):
+            with self.subTest(operand_max=invalid):
+                self.assertIsNotNone(flashcards.selection_error(0, 200, operand_max=invalid))
+                with self.assertRaises(ValueError):
+                    flashcards.generate_cards(0, 200, operand_max=invalid)
+                with self.assertRaises(ValueError):
+                    flashcards.card_pool('addition', 0, 200, invalid)
+        for low, high in ((-1, 100), (0, 201), (200, 0)):
+            with self.assertRaises(ValueError):
+                flashcards.generate_cards(low, high, operand_max=100)
+        random.seed(1)
+        implicit = flashcards.generate_cards()
+        random.seed(1)
+        self.assertEqual(implicit, flashcards.generate_cards(operand_max=None))
+        self.assertTrue(all(p['number_range'] == 20 for p in implicit))
+
+    def test_extended_flags_include_tens_and_hundreds_carry_and_borrow(self):
+        addition = {(p['left_operand'], p['right_operand']): p for p in flashcards.card_pool('addition', 0, 200, 100)}
+        subtraction = {(p['left_operand'], p['right_operand']): p for p in flashcards.card_pool('subtraction', 0, 100, 100)}
+        for pair in ((90, 20), (50, 50), (99, 1), (9, 1)):
+            self.assertTrue(addition[pair]['carry'], pair)
+        for pair in ((100, 100), (10, 20), (100, 0), (9, 0)):
+            self.assertFalse(addition[pair]['carry'], pair)
+        for pair in ((100, 1), (100, 10), (100, 20), (20, 1)):
+            self.assertTrue(subtraction[pair]['borrowing'], pair)
+        for pair in ((100, 100), (100, 0), (99, 9), (90, 10)):
+            self.assertFalse(subtraction[pair]['borrowing'], pair)
+        row = learning.make_attempt(addition[90, 20], 'user_001', 'big', 1, 'normal', 110, 2, 1)
+        self.assertTrue(row['carry'])
+        label = flashcards.report_tables([row])['structures'][0]['分類']
+        self.assertIn('100までの数／答え200まで', label)
+        self.assertIn('繰り上がりあり', label)
+
+    def test_speech_parser_understands_hundreds_in_all_four_notations(self):
+        examples = {
+            100: ('100', '１００', '百', 'ひゃく', 'ヒャク'),
+            101: ('101', '百一', 'ひゃくいち', 'ヒャクイチ'),
+            110: ('110', '百十', 'ひゃくじゅう', 'ヒャクジュウ'),
+            199: ('199', '百九十九', 'ひゃくきゅうじゅうきゅう', 'ヒャクキュウジュウキュウ'),
+            200: ('200', '二百', 'にひゃく', 'ニヒャク'),
+            201: ('201', '二百一', 'にひゃくいち'),
+            300: ('三百', 'さんびゃく', 'サンビャク'),
+            400: ('四百', 'よんひゃく'), 500: ('五百', 'ごひゃく'),
+            600: ('六百', 'ろっぴゃく', 'ロッピャク'), 700: ('七百', 'ななひゃく'),
+            800: ('八百', 'はっぴゃく', 'ハッピャク'),
+            999: ('999', '九百九十九', 'きゅうひゃくきゅうじゅうきゅう'),
+        }
+        for number, phrases in examples.items():
+            for phrase in phrases:
+                with self.subTest(phrase=phrase):
+                    self.assertEqual(flashcards.parse_spoken_number(phrase), number)
+        self.assertEqual(flashcards.parse_spoken_number('答えは 二百一 です。'), 201)
+        for phrase in ('1000', '１０００', '千', 'せん', 'いっせん', '十百', '百百',
+                       '百零', 'ひゃくぜろ', 'さんひゃく', 'ろくひゃく', 'はちひゃく',
+                       '100 1', '100と1', '百と一', 'ひゃく いち', '100.1', '100/1',
+                       '100か200', '百、二百', 'にひゃくさんびゃく', '-100', '1001'):
             with self.subTest(phrase=phrase):
                 self.assertIsNone(flashcards.parse_spoken_number(phrase))
 

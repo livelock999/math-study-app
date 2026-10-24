@@ -10,19 +10,35 @@ import unicodedata
 from learning import make_problem
 
 
-def card_pool(operation, answer_min, answer_max):
-    """1年生の加法・20までの減法から、指定した答えのカードを作ります。"""
-    lefts = range(1, 10) if operation == "addition" else range(1, 21)
-    pool = [make_problem(operation, 20, left, right)
-            for left in lefts for right in range(1, 10)
-            if answer_min <= (left + right if operation == "addition" else left - right) <= answer_max]
+def card_pool(operation, answer_min, answer_max, operand_max=None):
+    """従来カード、または0〜100どうしの計算から答え範囲で絞ります。"""
+    if operation not in ("addition", "subtraction") or (operand_max is not None and (type(operand_max) is not int or operand_max != 100)):
+        raise ValueError("カードの演算・数の範囲が不正です。")
+    lefts = range(101) if operand_max == 100 else (range(1, 10) if operation == "addition" else range(1, 21))
+    rights = range(101) if operand_max == 100 else range(1, 10)
+    pool = []
+    for left in lefts:
+        for right in rights:
+            answer = left + right if operation == "addition" else left - right
+            if answer < 0 or not answer_min <= answer <= answer_max:
+                continue
+            problem = make_problem(operation, 200 if operand_max == 100 else 20, left, right)
+            if operand_max == 100:
+                # 通常問題のタグ定義は変えず、拡張カードは全桁の繰上り・繰下りを記録。
+                if operation == "addition":
+                    problem["carry"] = any(left // place % 10 + right // place % 10 >= 10 for place in (1, 10, 100))
+                else:
+                    problem["borrowing"] = any(left // place % 10 < right // place % 10 for place in (1, 10, 100))
+            pool.append(problem)
     return sorted(pool, key=lambda problem: (problem["correct_answer"], problem["left_operand"], problem["right_operand"]))
 
 
-def selection_error(answer_min=11, answer_max=18, count=20, order="shuffle", mode="addition"):
+def selection_error(answer_min=11, answer_max=18, count=20, order="shuffle", mode="addition", operand_max=None):
     if mode not in ("addition", "subtraction", "mixed"):
         return "カードの種類が不正です。"
-    minimum, maximum = (2, 18) if mode == "addition" else (0, 19)
+    if operand_max is not None and (type(operand_max) is not int or operand_max != 100):
+        return "カードの数の範囲が不正です。"
+    minimum, maximum = (0, 200) if operand_max == 100 else ((2, 18) if mode == "addition" else (0, 19))
     if (any(type(value) is not int for value in (answer_min, answer_max, count))
             or not minimum <= answer_min <= answer_max <= maximum or not 1 <= count <= 100
             or order not in ("ordered", "shuffle")):
@@ -31,9 +47,10 @@ def selection_error(answer_min=11, answer_max=18, count=20, order="shuffle", mod
     if mode == "mixed" and count < 2:
         return "ミックスでは、たし算とひき算を出すため2問以上にしてください。"
     for operation in operations:
-        if not card_pool(operation, answer_min, answer_max):
+        if not card_pool(operation, answer_min, answer_max, operand_max):
             name = "たし算" if operation == "addition" else "ひき算"
-            return f"この答え範囲では{name}のカードがありません。両方を含める範囲にしてください。"
+            guide = "両方を含める範囲にしてください。" if mode == "mixed" else "答え範囲を変えてください。"
+            return f"この答え範囲では{name}のカードがありません。{guide}"
     return None
 
 
@@ -50,17 +67,17 @@ def _draw_cards(pool, count, shuffle):
     return cards
 
 
-def generate_cards(answer_min=11, answer_max=18, count=20, order="shuffle", mode="addition"):
-    error = selection_error(answer_min, answer_max, count, order, mode)
+def generate_cards(answer_min=11, answer_max=18, count=20, order="shuffle", mode="addition", operand_max=None):
+    error = selection_error(answer_min, answer_max, count, order, mode, operand_max)
     if error:
         raise ValueError(error)
     if mode != "mixed":
-        return _draw_cards(card_pool(mode, answer_min, answer_max), count, order == "shuffle")
+        return _draw_cards(card_pool(mode, answer_min, answer_max, operand_max), count, order == "shuffle")
     # 奇数の1問は毎回ランダムに配分。ミックスは順番指定でもシャッフルします。
     extra_addition = random.choice((0, 1)) if count % 2 else 0
     addition_count = count // 2 + extra_addition
-    cards = (_draw_cards(card_pool("addition", answer_min, answer_max), addition_count, True)
-             + _draw_cards(card_pool("subtraction", answer_min, answer_max), count - addition_count, True))
+    cards = (_draw_cards(card_pool("addition", answer_min, answer_max, operand_max), addition_count, True)
+             + _draw_cards(card_pool("subtraction", answer_min, answer_max, operand_max), count - addition_count, True))
     random.shuffle(cards)
     # 直後連続がある場合だけ並べ直します。残りが多いカードを先に使い、
     # 同数なら上のシャッフル順を採用すると、最後に同一カードが余りません。
@@ -81,13 +98,13 @@ def generate_cards(answer_min=11, answer_max=18, count=20, order="shuffle", mode
 
 
 def parse_spoken_number(text):
-    """一つの0〜99だけを認識。曖昧な文から数字を拾って採点しません。"""
+    """一つの0〜999だけを認識。曖昧な文から数字を拾って採点しません。"""
     if not isinstance(text, str) or len(text) > 100:
         return None
     text = unicodedata.normalize("NFKC", text).strip().rstrip("。.!！?？").strip()
     text = re.sub(r"^(?:こたえは|答えは|こたえ|答え)", "", text).strip()
     text = re.sub(r"(?:です|だよ|こ)$", "", text).strip()
-    if re.fullmatch(r"[0-9]{1,2}", text):
+    if re.fullmatch(r"[0-9]{1,3}", text):
         return int(text)
     # カタカナ音声結果も、ひらがなと同じ小さな表で扱います。
     text = "".join(chr(ord(char) - 96) if "ァ" <= char <= "ヶ" else char for char in text)
@@ -95,16 +112,30 @@ def parse_spoken_number(text):
              "に": 2, "二": 2, "さん": 3, "三": 3, "よん": 4, "し": 4, "四": 4,
              "ご": 5, "五": 5, "ろく": 6, "六": 6, "なな": 7, "しち": 7, "七": 7,
              "はち": 8, "八": 8, "きゅう": 9, "く": 9, "九": 9}
-    if text in units:
-        return units[text]
-    for ten in ("じゅう", "十"):
-        if text.count(ten) == 1:
-            before, after = text.split(ten)
-            tens = 1 if before == "" else units.get(before)
-            ones = 0 if after == "" else units.get(after)
-            if tens is not None and 1 <= tens <= 9 and ones is not None:
-                return tens * 10 + ones
-    return None
+    def under_hundred(part):
+        if part in units:
+            return units[part]
+        for ten in ("じゅう", "十"):
+            if part.count(ten) == 1:
+                before, after = part.split(ten)
+                tens = 1 if before == "" else units.get(before)
+                ones = 0 if after == "" else units.get(after)
+                if tens is not None and 1 <= tens <= 9 and ones is not None and (after == "" or ones > 0):
+                    return tens * 10 + ones
+        return None
+
+    hundreds = {"百": 100, "二百": 200, "三百": 300, "四百": 400, "五百": 500,
+                "六百": 600, "七百": 700, "八百": 800, "九百": 900,
+                "ひゃく": 100, "にひゃく": 200, "さんびゃく": 300, "よんひゃく": 400,
+                "ごひゃく": 500, "ろっぴゃく": 600, "ななひゃく": 700, "はっぴゃく": 800, "きゅうひゃく": 900}
+    for prefix, value in hundreds.items():
+        if text.startswith(prefix):
+            rest = text[len(prefix):]
+            if rest == "":
+                return value
+            remainder = under_hundred(rest)
+            return value + remainder if remainder is not None and remainder > 0 else None
+    return under_hundred(text)
 
 
 def summarize(records):
@@ -128,7 +159,8 @@ def report_tables(records):
         attribute_name = "繰り上がり" if addition else "繰り下がり"
         attribute = record["carry"] if addition else record["borrowing"]
         groups["operations"][operation_name].append(record)
-        structure = (f"{operation_name}／{record['number_range']}まで／{attribute_name}{'あり' if attribute else 'なし'}／"
+        range_label = "100までの数／答え200まで" if record["number_range"] == 200 else f"{record['number_range']}まで"
+        structure = (f"{operation_name}／{range_label}／{attribute_name}{'あり' if attribute else 'なし'}／"
                      f"10またぎ{'あり' if record['crosses_10'] else 'なし'}")
         if addition:
             structure += f"／同じ数{'あり' if record['doubles'] else 'なし'}"
