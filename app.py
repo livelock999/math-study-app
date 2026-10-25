@@ -924,6 +924,9 @@ screens[st.session_state.screen]()
 
 if st.session_state.screen in ("settings", "jp_settings", "report", "jp_analysis", "results", "jp_results", "flashcard_results", "flashcard_settings", "flashcard_report"):
     with st.expander("おうちの人へ・レポートと設定"):
+        if st.session_state.screen == "flashcard_settings":
+            from flashcards_ui import settings_notes
+            settings_notes()
         if st.button("週間レポート・学習目標・記録の書き出し（保護者向け）", key="parent_dashboard_open", use_container_width=True):
             st.session_state.parent_dashboard_return = st.session_state.screen
             st.session_state.screen = "parent_dashboard"

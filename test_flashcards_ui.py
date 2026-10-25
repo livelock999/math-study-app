@@ -89,6 +89,25 @@ class FlashcardUIAppTests(unittest.TestCase):
         upper = (100 if mode in ('subtraction', 'mixed') else 200) if upper is None else upper
         self.configure_mode(mode, lower, upper)
 
+    def test_compact_settings_preserve_controls_and_fold_explanations(self):
+        self.configure_mode('addition', 11, 100)
+        self.assertEqual(self.app.number_input(key='fc_min').label, '小さい数')
+        self.assertEqual(self.app.number_input(key='fc_max').label, '大きい数')
+        self.assertTrue(self.app.radio(key='fc_mode').proto.horizontal)
+        self.assertNotIn('fc_operand_max', [radio.key for radio in self.app.radio])
+        self.assertFalse(any('class="study-brand"' in item.value for item in self.app.markdown))
+        help_panel = next(e for e in self.app.expander if e.label == 'つかいかた')
+        parent_panel = next(e for e in self.app.expander if e.label == 'おうちの人へ・レポートと設定')
+        self.assertFalse(help_panel.proto.expanded)
+        self.assertFalse(parent_panel.proto.expanded)
+        self.assertTrue(any('自動で次へ進みます' in item.value for item in help_panel.caption))
+        self.assertTrue(any('音声ファイルは保存しません' in item.value for item in parent_panel.caption))
+        self.assertEqual(len([b for b in self.app.button if b.key == 'fc_back']), 1)
+        self.assertFalse(self.app.button(key='fc_start').disabled)
+        self.click('fc_start')
+        self.assertEqual(self.app.session_state.fc_round['answer_max'], 100)
+        self.assertEqual(self.app.session_state.fc_round['operand_max'], 100)
+
     def test_unified_answer_fields_allow_expansion_and_keep_legacy_defaults_and_ids(self):
         for mode, bounds in (('addition', (11, 18)), ('subtraction', (0, 9)), ('mixed', (0, 18))):
             self.configure_mode(mode)
