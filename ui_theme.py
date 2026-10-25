@@ -10,10 +10,12 @@ def apply_theme():
     .stApp { background: var(--paper); color: var(--ink); }
     /* Keep the first line below Streamlit's fixed 3.75rem toolbar on every screen. */
     [data-testid="stMainBlockContainer"] { max-width: 760px;
-      padding-top: calc(4.5rem + env(safe-area-inset-top, 0px)); padding-bottom: 3rem; }
+      padding-top: calc(4rem + env(safe-area-inset-top, 0px)); padding-bottom: 1.25rem; }
+    [data-testid="stVerticalBlock"] { gap: .6rem; }
+    [data-testid="stMarkdownContainer"] p { margin-bottom: .3rem; }
     h1,h2,h3 { color: var(--ink); letter-spacing: .025em; }
     h2 { font-size: 1.4rem !important; }
-    h3 { font-size: 1.16rem !important; }
+    h3 { font-size: 1.1rem !important; padding-top: .25rem; padding-bottom: .25rem; }
     .study-brand { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
     .study-brand > div, .study-card-heading > div { min-width: 0; }
     .study-brand-icon { border: 1px solid #cadace; background: #edf4e7; border-radius: 16px;
@@ -21,13 +23,14 @@ def apply_theme():
     .study-title { font-size: clamp(1.2rem,4.8vw,1.75rem); font-weight: 700; letter-spacing: .025em; line-height: 1.45; margin: 0; padding: 0; }
     .study-brand-title + .study-brand-title::before { content: " "; }
     .study-brand p { color: #60776b; font-size: .8rem; margin: 4px 0 0; letter-spacing: .08em; }
-    .study-card-heading { display: flex; align-items: center; gap: 14px; margin-bottom: 5px; }
-    .study-card-icon { display: grid; place-items: center; width: 46px; height: 46px;
-      flex: 0 0 46px; border-radius: 15px; background: #ffffffb3; font-size: 24px; }
+    .study-card-heading { display: flex; align-items: center; gap: 9px; margin-bottom: 0; }
+    .study-card-icon { display: grid; place-items: center; width: 32px; height: 32px;
+      flex: 0 0 32px; border-radius: 10px; background: #ffffffb3; font-size: 20px; }
     .study-card-heading h3 { padding: 0; margin: 0; overflow-wrap: anywhere; }
+    [data-testid="stMarkdown"] > div:has(.study-card-heading) { height: auto; min-height: 32px; }
     .study-card-heading p { color: #476454; font-size: .86rem; margin: 4px 0 0; line-height: 1.65; }
     [class*="st-key-review_card"], [class*="st-key-practice_card"], .st-key-user_cards {
-      border-radius: 24px; padding: 22px !important; border: 1px solid #d9e4d8;
+      border-radius: 16px; padding: 12px !important; border: 1px solid #d9e4d8;
       box-shadow: 0 5px 18px #24483e08; }
     [class*="st-key-review_card"] { background: #d8ead2; }
     .st-key-practice_card_math { background: #e1f0fa; border-color: #cce0ec; }
@@ -46,12 +49,13 @@ def apply_theme():
     button:focus-visible, summary:focus-visible { outline: 3px solid #7b9c62 !important; outline-offset: 3px; }
     [class*="st-key-review_card"] [data-testid="stButton"] button { background: #24483e;
       border-color: #24483e; color: #fffdf7; }
-    .st-key-subject_math button { background: #e1f0fa; border-color: #cce0ec; min-height: 66px; }
-    .st-key-subject_japanese button { background: #fce7dc; border-color: #ecd6c9; min-height: 66px; }
+    .st-key-subject_math button { background: #e1f0fa; border-color: #cce0ec; min-height: 48px; }
+    .st-key-subject_japanese button { background: #fce7dc; border-color: #ecd6c9; min-height: 48px; }
     .st-key-subject_math button:disabled, .st-key-subject_japanese button:disabled {
       opacity: 1; color: var(--ink); box-shadow: inset 0 -3px #66846f; }
-    [data-testid="stExpander"] { border-radius: 16px; border-color: #d5dfd4; background: #ffffff75; }
-    [data-testid="stExpander"] summary { min-height: 48px; }
+    .st-key-subject_math button:disabled p, .st-key-subject_japanese button:disabled p { color: var(--ink); }
+    [data-testid="stExpander"] { border-radius: 12px; border-color: #d5dfd4; background: #ffffff75; }
+    [data-testid="stExpander"] summary { min-height: 44px; padding-top: 6px; padding-bottom: 6px; }
     [data-testid="stMetric"] { padding: 14px; background: #edf4e7; border-radius: 18px; }
     [data-testid="stTabs"] button { min-height: 48px; white-space: normal; }
     [data-testid="stCaptionContainer"] { color: #58705f; }
@@ -61,7 +65,7 @@ def apply_theme():
       .study-brand-title + .study-brand-title::before { content: none; }
       [data-testid="stMainBlockContainer"] { padding-right: 1rem; padding-left: 1rem; padding-bottom: 2rem; }
       [class*="st-key-review_card"], [class*="st-key-practice_card"], .st-key-user_cards {
-        padding: 16px !important; border-radius: 20px; }
+        padding: 10px !important; border-radius: 14px; }
       .st-key-subject_navigation [data-testid="stHorizontalBlock"] { flex-wrap: nowrap; gap: .65rem; }
       .st-key-subject_navigation [data-testid="stColumn"] { min-width: 0 !important; flex: 1 1 0 !important; }
       [data-testid="stTabs"] [role="tablist"] { gap: .5rem; }
@@ -101,7 +105,7 @@ def apply_theme():
 
 
 def brand():
-    if st.session_state.get("screen") == "flashcard_settings":
+    if st.session_state.get("screen", "user") in ("user", "settings", "jp_settings", "flashcard_settings"):
         return
     if st.session_state.get("screen") in ("practice", "jp_practice", "flashcard_practice"):
         st.markdown('<div class="study-brand study-brand--compact" role="heading" aria-level="1">📚 れんしゅう</div>', unsafe_allow_html=True)
@@ -113,5 +117,7 @@ def brand():
 
 
 def card_heading(icon, title, caption):
+    # ホームは見出しと開始操作を優先し、繰り返しになる紹介文を省きます。
+    description = "" if st.session_state.get("screen", "user") in ("user", "settings", "jp_settings") else f'<p>{escape(caption)}</p>'
     st.markdown(f'<div class="study-card-heading"><span class="study-card-icon" aria-hidden="true">{escape(icon)}</span>'
-                f'<div><h3>{escape(title)}</h3><p>{escape(caption)}</p></div></div>', unsafe_allow_html=True)
+                f'<div><h3>{escape(title)}</h3>{description}</div></div>', unsafe_allow_html=True)
