@@ -114,7 +114,7 @@ def settings():
     st.subheader(f"{learning.USERS[st.session_state.user_id]}、こくごを れんしゅうしよう")
     paused = st.session_state.get("jp_round")
     if paused and paused.get("paused") and paused.get("user_id") == st.session_state.user_id:
-        st.caption("とちゅうの れんしゅうが あるよ。あたらしく はじめても、ほぞんした こたえは のこります。")
+        st.caption("とちゅうの れんしゅうが あるよ。ほぞんした こたえは のこるよ。")
         if st.button("つづきから", key="jp_resume", type="primary", use_container_width=True):
             paused["paused"] = False
             goto("jp_practice")
@@ -133,6 +133,7 @@ def settings():
                                           format_func=lambda n: "おまかせ" if n is None else LEVELS[n], key="jp_particle_level")
             count = st.radio("もんだいの かず", [5, 10], index=1, format_func=lambda n: f"{n}もん",
                              horizontal=True, key="jp_count")
+            st.caption("こたえや ヒントに あわせて、つぎの セットの むずかしさを すこしずつ。条件を自分で決めるときは下のスタートを使えます。")
         st.caption(f"1かい {count}もん。あせらず やってみよう。")
         if st.button("おまかせで れんしゅう", key="jp_adaptive_start", type="primary", use_container_width=True):
             records = load()
@@ -149,7 +150,6 @@ def settings():
                         start(plan["items"], difficulty_plan=plan)
                     else:
                         st.info(plan["message"])
-        st.caption("こたえや ヒントに あわせて、つぎの セットの むずかしさを すこしずつ。条件を自分で決めるときは下のスタートを使えます。")
         if st.button(plain_label("こくご スタート", st.session_state.user_id), key="jp_start", use_container_width=True):
             start(jp.choose_questions(category, count, particle_level=particle_level))
     with review_card:
