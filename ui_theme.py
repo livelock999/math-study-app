@@ -73,10 +73,36 @@ def apply_theme():
     [data-testid="stMainBlockContainer"]:has(.study-brand--compact) > [data-testid="stVerticalBlock"] { gap: .5rem; }
     [data-testid="stMainBlockContainer"]:has(.study-brand--compact) [data-testid="stProgress"] p { margin-bottom: 4px; }
     @media(max-height:740px) { [data-testid="stMarkdown"]:has(.study-brand--compact) { display: none; } }
+    .st-key-fc_settings [data-testid="stVerticalBlock"] { gap: .65rem; }
+    .st-key-fc_settings_header [data-testid="stHorizontalBlock"],
+    .st-key-fc_answer_range [data-testid="stHorizontalBlock"] { flex-wrap: nowrap; gap: .65rem; }
+    .st-key-fc_settings_header [data-testid="stColumn"],
+    .st-key-fc_answer_range [data-testid="stColumn"] { min-width: 0 !important; }
+    .st-key-fc_settings_header [data-testid="stColumn"]:first-child { flex: 0 0 76px !important; }
+    .st-key-fc_settings_header [data-testid="stColumn"]:last-child { flex: 1 1 0 !important; }
+    .st-key-fc_settings_header button { padding: 6px !important; white-space: nowrap; }
+    .st-key-fc_answer_range [data-testid="stColumn"] { flex: 1 1 0 !important; }
+    .st-key-fc_settings .fc-settings-title { padding: 10px 0; margin: 0; font-size: 1.1rem !important; line-height: 1.5; }
+    .st-key-fc_settings .fc-settings-title span { font-size: .85rem; font-weight: 500; color: #58705f; }
+    .st-key-fc_settings .st-key-fc_mode, .st-key-fc_settings .st-key-fc_order { width: 100% !important; }
+    .st-key-fc_settings [data-testid="stRadio"] [role="radiogroup"] { display: flex; flex-wrap: nowrap; gap: 6px; width: 100%; }
+    .st-key-fc_settings [data-testid="stRadio"] [role="radiogroup"] > div { flex: 1 1 0; min-width: 0; }
+    .st-key-fc_settings [data-testid="stRadio"] :is(label[data-baseweb="radio"], [data-testid="stRadioOption"]) {
+      flex: 1 1 0; min-width: 0; min-height: 46px; margin: 0; padding: 6px;
+      display: flex; justify-content: center; width: 100%;
+      border: 1px solid #d3ded5; border-radius: 10px; background: #fffdf7; color: #24483e; }
+    .st-key-fc_settings [data-testid="stRadio"] :is(label[data-baseweb="radio"], [data-testid="stRadioOption"]):has(input:checked) {
+      background: #24483e; border-color: #24483e; color: #fffdf7; }
+    .st-key-fc_settings [data-testid="stRadio"] :is(label[data-baseweb="radio"], [data-testid="stRadioOption"]) p { color: inherit; font-size: .9rem; }
+    .st-key-fc_settings [data-testid="stRadioOption"] > div > div:not([data-testid]) { display: none; }
+    .st-key-fc_answer_range input { min-height: 44px; font-size: 18px; }
+    .st-key-fc_answer_range [data-testid="stNumberInput"] button { min-height: 44px; }
     </style>""", unsafe_allow_html=True)
 
 
 def brand():
+    if st.session_state.get("screen") == "flashcard_settings":
+        return
     if st.session_state.get("screen") in ("practice", "jp_practice", "flashcard_practice"):
         st.markdown('<div class="study-brand study-brand--compact" role="heading" aria-level="1">📚 れんしゅう</div>', unsafe_allow_html=True)
         return
