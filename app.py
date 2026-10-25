@@ -156,7 +156,7 @@ def settings_screen():
             previous_round["suspended"] = False
             st.session_state.screen = "practice"
             st.rerun()
-        st.caption("スタートを押すとあたらしく始めます。これまで保存した回答は残ります。")
+        st.caption("あたらしく始めても、ほぞんした こたえは のこるよ。")
     with st.container(key="flashcard_entry"):
         card_heading("🃏", "けいさんカード", "こたえて、つぎへ。テンポよく れんしゅうしよう。")
         if st.button("けいさんカードを はじめる", key="flashcard_open", use_container_width=True):
@@ -191,6 +191,7 @@ def settings_screen():
             error = selection_error(mode, limit, count, special, problem_format)
             if error:
                 st.info(error)
+            st.caption("こたえや ヒントに あわせて、つぎの セットの むずかしさを すこしずつ。条件を自分で決めるときは下のスタートを使えます。")
         st.caption(f"1かい {count}もん。まちがえた もんだいは あとで れんしゅうできるよ。")
         if st.button("おまかせで れんしゅう", key="math_adaptive_start", type="primary", use_container_width=True):
             try:
@@ -206,7 +207,6 @@ def settings_screen():
                     st.rerun()
                 else:
                     st.info(plan["message"])
-        st.caption("こたえや ヒントに あわせて、つぎの セットの むずかしさを すこしずつ。条件を自分で決めるときは下のスタートを使えます。")
         if st.button(plain_label("れんしゅう スタート", st.session_state.user_id), use_container_width=True, disabled=bool(error)):
             st.session_state.attempt_counts = {}
             start_round(generate_problems(mode, limit, count, special, problem_format), "normal")
