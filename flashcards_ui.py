@@ -44,19 +44,16 @@ def start_round(cards, answer_min=11, answer_max=18, order="shuffle", selection_
     goto("flashcard_practice")
 
 
-def answer_settings(mode, operand_max):
-    """答えの入力上限と初期範囲を、選んだカードに合わせます。"""
-    if operand_max == 100:
-        maximum = 100 if mode == "subtraction" else 200
-        return 0, maximum, 0, maximum
-    minimum, maximum = (2, 18) if mode == "addition" else (0, 19)
+def answer_settings(mode):
+    """範囲の切り替えなしで、小さい答えから100以上まで指定できます。"""
+    maximum = 100 if mode == "subtraction" else 200
     low, high = {"addition": (11, 18), "subtraction": (0, 9), "mixed": (0, 18)}[mode]
-    return minimum, maximum, low, high
+    return 0, maximum, low, high
 
 
 def reset_mode_range():
-    """演算や数の範囲を変えたら、有効な答え範囲に戻します。"""
-    _, _, low, high = answer_settings(st.session_state.fc_mode, st.session_state.get("fc_operand_max"))
+    """演算を変えたら、その演算の初期範囲に戻します。"""
+    _, _, low, high = answer_settings(st.session_state.fc_mode)
     st.session_state.fc_min = low
     st.session_state.fc_max = high
     if st.session_state.fc_mode == "mixed":
@@ -69,23 +66,19 @@ def settings_screen():
                     format_func=lambda value: {"addition": "たし算", "subtraction": "ひき算",
                                                "mixed": "たし算・ひき算ミックス"}[value],
                     key="fc_mode", on_change=reset_mode_range)
-    operand_max = st.radio("数の範囲", [None, 100],
-                           format_func=lambda value: "100までの数" if value == 100 else "これまでのカード",
-                           key="fc_operand_max", on_change=reset_mode_range, horizontal=True)
     descriptions = {
-        "addition": "1〜9どうしの たし算。答えは2〜18から選べます。",
-        "subtraction": "20までの数から1〜9をひく ひき算。答えは0〜19で、マイナスにはなりません。",
-        "mixed": "たし算とひき算をほぼ半分ずつ、シャッフルで出します。両方のカードがある答え範囲を選んでね。",
+        "addition": "答えは0〜200から選べます。100までの数を使う たし算にも対応しています。",
+        "subtraction": "答えは0〜100から選べます。マイナスになる ひき算は出しません。",
+        "mixed": "たし算とひき算をほぼ半分ずつ、シャッフルで出します。答えは0〜200から選べます。",
     }
-    if operand_max == 100:
-        descriptions = {
-            "addition": "0〜100どうしの たし算。答えは0〜200から選べます。",
-            "subtraction": "0〜100どうしの ひき算。答えは0〜100で、マイナスにはなりません。",
-            "mixed": "0〜100どうしの たし算・ひき算をほぼ半分ずつ、シャッフルで出します。答えは0〜200から選べます。",
-        }
     st.caption(descriptions[mode])
     st.caption("答えを声・数字キー・テンキーで回答すると、自動で次へ進みます。わからないときは答えを見てから次へ進めます。")
-    minimum, maximum, low_default, high_default = answer_settings(mode, operand_max)
+    minimum, maximum, low_default, high_default = answer_settings(mode)
+    # 更新前から開いていた設定の有効な値は維持し、上限外だけ補正します。
+    for key in ("fc_min", "fc_max"):
+        value = st.session_state.get(key)
+        if type(value) is int and not minimum <= value <= maximum:
+            st.session_state[key] = max(minimum, min(maximum, value))
     low = st.number_input("答えのいちばん小さい数", minimum, maximum, low_default, key="fc_min")
     high = st.number_input("答えのいちばん大きい数", minimum, maximum, high_default, key="fc_max")
     count = st.select_slider("カードの数", [5, 10, 20, 30, 50], value=20, key="fc_count")
@@ -93,6 +86,9 @@ def settings_screen():
                      horizontal=True, key="fc_order", disabled=mode == "mixed")
     if mode == "mixed":
         order = "shuffle"
+    # 従来の答え範囲で成立するセットは、問題・IDをそのまま使います。
+    # 広い範囲や0のたし算は100までのカードへ自動的に広げます。
+    operand_max = None if flashcards.selection_error(low, high, count, order, mode) is None else 100
     error = ("小さい数を、大きい数以下にしてください。" if low > high
              else flashcards.selection_error(low, high, count, order, mode, operand_max))
     if error:

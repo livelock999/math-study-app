@@ -84,29 +84,75 @@ class FlashcardUIAppTests(unittest.TestCase):
         self.assertFalse(self.app.exception)
 
     def configure_hundred_mode(self, mode='addition', lower=None, upper=None):
-        self.app.session_state.screen = 'flashcard_settings'
-        self.app.run()
-        self.app.radio(key='fc_mode').set_value(mode).run()
-        self.app.radio(key='fc_operand_max').set_value(100).run()
-        if lower is not None:
-            self.app.number_input(key='fc_min').set_value(lower).run()
-        if upper is not None:
-            self.app.number_input(key='fc_max').set_value(upper).run()
-        self.app.select_slider(key='fc_count').set_value(5).run()
-        self.assertFalse(self.app.exception)
+        # 統合画面では答え範囲を直接広げると100までの数へ自動拡張する。
+        lower = 0 if lower is None else lower
+        upper = (100 if mode in ('subtraction', 'mixed') else 200) if upper is None else upper
+        self.configure_mode(mode, lower, upper)
 
-    def test_hundred_range_defaults_and_return_to_legacy_cards(self):
-        for mode, bounds in (('addition', (0, 200)), ('subtraction', (0, 100)), ('mixed', (0, 200))):
-            self.configure_hundred_mode(mode)
+    def test_unified_answer_fields_allow_expansion_and_keep_legacy_defaults_and_ids(self):
+        for mode, bounds in (('addition', (11, 18)), ('subtraction', (0, 9)), ('mixed', (0, 18))):
+            self.configure_mode(mode)
             self.assertEqual((self.app.number_input(key='fc_min').value, self.app.number_input(key='fc_max').value), bounds)
+            self.assertEqual(self.app.number_input(key='fc_min').proto.min, 0)
+            self.assertEqual(self.app.number_input(key='fc_max').proto.max, 100 if mode == 'subtraction' else 200)
+            self.assertNotIn('fc_operand_max', [radio.key for radio in self.app.radio])
             self.assertFalse(self.app.button(key='fc_start').disabled)
-        self.app.radio(key='fc_operand_max').set_value(None).run()
-        self.assertEqual((self.app.number_input(key='fc_min').value, self.app.number_input(key='fc_max').value), (0, 18))
-        self.assertFalse(self.app.button(key='fc_start').disabled)
         self.click('fc_start')
         state = self.app.session_state.fc_round
         self.assertIsNone(state['operand_max'])
         self.assertTrue(all(card['number_range'] == 20 for card in state['cards']))
+        old_ids = {card['problem_id'] for operation in ('addition', 'subtraction')
+                   for card in flashcards.card_pool(operation, 0, 18)}
+        self.assertTrue(all(card['problem_id'] in old_ids for card in state['cards']))
+
+    def test_expanding_upper_answer_to_100_and_retry_preserves_all_old_history_columns(self):
+        problem = learning.make_problem('addition', 20, 9, 4)
+        old_normal = learning.make_attempt(problem, 'user_001', 'legacy-normal', 1, 'normal', 12, 3, 1, round_size=1)
+        old_retry = learning.make_attempt(problem, 'user_001', 'legacy-retry', 1, 'retry', 13, 2, 2, round_size=1)
+        for row in (old_normal, old_retry):
+            self.writer(row, self.path)
+        original = {row['attempt_id']: deepcopy(row) for row in self.rows()}
+        self.configure_mode('addition', 0, 100)
+        self.click('fc_start')
+        state = self.app.session_state.fc_round
+        self.assertEqual((state['operand_max'], state['answer_max']), (100, 100))
+        self.event('answer', input_method='keyboard', answer=999)
+        first = deepcopy(state['answers'][0])
+        self.event('next')
+        for _ in range(4):
+            self.answer(method='keypad')
+            self.event('next')
+        self.click('fc_retry')
+        self.assertEqual(self.app.session_state.fc_round['operand_max'], 100)
+        self.answer()
+        all_rows = {row['attempt_id']: row for row in self.rows()}
+        self.assertEqual(len(all_rows), 8)
+        for identifier, snapshot in original.items():
+            self.assertEqual(all_rows[identifier], snapshot)
+            self.assertEqual(set(all_rows[identifier]), set(learning.COLUMNS))
+        self.assertEqual(all_rows[first['attempt_id']], first)
+        retry = next(row for row in all_rows.values() if row['selection_type'] == 'retry' and row['session_id'] != 'legacy-retry')
+        self.assertNotEqual(retry['attempt_id'], first['attempt_id'])
+        self.assertTrue(retry['is_correct'])
+        self.assertFalse(retry['first_attempt_correct'])
+
+    def test_old_range_selector_is_ignored_valid_bounds_persist_and_subtraction_bounds_clamp(self):
+        self.app.session_state.screen = 'flashcard_settings'
+        self.app.session_state.fc_mode = 'addition'
+        self.app.session_state.fc_operand_max = 100  # 旧版の画面状態が残る場合。
+        self.app.session_state.fc_min = 0
+        self.app.session_state.fc_max = 100
+        self.app.run()
+        self.assertFalse(self.app.exception)
+        self.assertNotIn('fc_operand_max', [radio.key for radio in self.app.radio])
+        self.assertEqual((self.app.number_input(key='fc_min').value, self.app.number_input(key='fc_max').value), (0, 100))
+        self.app.run()
+        self.assertEqual(self.app.number_input(key='fc_max').value, 100)
+        self.app.session_state.fc_mode = 'subtraction'
+        self.app.session_state.fc_max = 200
+        self.app.run()
+        self.assertFalse(self.app.exception)
+        self.assertEqual((self.app.number_input(key='fc_min').value, self.app.number_input(key='fc_max').value), (0, 100))
 
     def test_hundred_addition_200_and_three_digit_wrong_answer_retry_keep_initial_record(self):
         self.configure_hundred_mode('addition', 200, 200)
@@ -138,7 +184,7 @@ class FlashcardUIAppTests(unittest.TestCase):
         self.assertIn(first, self.rows())
 
     def test_hundred_subtraction_zero_and_stop_preserve_only_submitted_answer(self):
-        self.configure_hundred_mode('subtraction', 0, 0)
+        self.configure_hundred_mode('subtraction', 0, 100)
         self.click('fc_start')
         state = self.app.session_state.fc_round
         state['cards'][0] = next(card for card in flashcards.card_pool('subtraction', 0, 0, 100)
@@ -198,14 +244,21 @@ class FlashcardUIAppTests(unittest.TestCase):
         self.assertEqual(row['number_range'], 20)
         self.assertFalse(row['is_correct'])
 
-    def test_mode_switch_resets_ranges_and_invalid_mixed_range_disables_start(self):
+    def test_mode_switch_resets_defaults_and_mixed_zero_to_one_expands_automatically(self):
         for mode, lower, upper in (('subtraction', 0, 9), ('mixed', 0, 18), ('addition', 11, 18)):
             self.configure_mode(mode)
             self.assertEqual((self.app.number_input(key='fc_min').value, self.app.number_input(key='fc_max').value),
                              (lower, upper))
         self.configure_mode('mixed', 0, 1)
-        self.assertTrue(self.app.button(key='fc_start').disabled)
+        self.assertFalse(self.app.button(key='fc_start').disabled)
         self.assertEqual(self.rows(), [])
+        self.click('fc_start')
+        state = self.app.session_state.fc_round
+        self.assertEqual(state['operand_max'], 100)
+        self.assertEqual({card['operation'] for card in state['cards']}, {'addition', 'subtraction'})
+        self.assertTrue(all(0 <= card['correct_answer'] <= 1 for card in state['cards']))
+        self.configure_mode('mixed', 10, 0)
+        self.assertTrue(self.app.button(key='fc_start').disabled)
         self.configure_mode('subtraction', 19, 19)
         self.assertFalse(self.app.button(key='fc_start').disabled)
 
