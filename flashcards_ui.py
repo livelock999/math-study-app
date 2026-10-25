@@ -1,6 +1,7 @@
 """けいさんカードの画面。回答保存が成功してから次のカードに進みます。"""
 
 from pathlib import Path
+from html import escape
 import math
 import sqlite3
 import time
@@ -61,26 +62,42 @@ def reset_mode_range():
 
 
 def settings_screen():
-    st.subheader(f"{learning.USERS[st.session_state.user_id]}の けいさんカード")
+    with st.container(key="fc_settings"):
+        _settings_form()
+
+
+def _settings_form():
+    with st.container(key="fc_settings_header"):
+        back, title = st.columns([1, 4], gap="small")
+        with back:
+            if st.button("もどる", key="fc_back", use_container_width=True):
+                goto("settings")
+        with title:
+            name = escape(learning.USERS[st.session_state.user_id])
+            st.markdown(f'<h3 class="fc-settings-title"><span>{name} ｜</span> けいさんカード</h3>',
+                        unsafe_allow_html=True)
     mode = st.radio("カードの種類", ["addition", "subtraction", "mixed"],
                     format_func=lambda value: {"addition": "たし算", "subtraction": "ひき算",
-                                               "mixed": "たし算・ひき算ミックス"}[value],
-                    key="fc_mode", on_change=reset_mode_range)
+                                               "mixed": "ミックス"}[value],
+                    horizontal=True, key="fc_mode", on_change=reset_mode_range)
     descriptions = {
         "addition": "答えは0〜200から選べます。100までの数を使う たし算にも対応しています。",
         "subtraction": "答えは0〜100から選べます。マイナスになる ひき算は出しません。",
         "mixed": "たし算とひき算をほぼ半分ずつ、シャッフルで出します。答えは0〜200から選べます。",
     }
-    st.caption(descriptions[mode])
-    st.caption("答えを声・数字キー・テンキーで回答すると、自動で次へ進みます。わからないときは答えを見てから次へ進めます。")
     minimum, maximum, low_default, high_default = answer_settings(mode)
     # 更新前から開いていた設定の有効な値は維持し、上限外だけ補正します。
     for key in ("fc_min", "fc_max"):
         value = st.session_state.get(key)
         if type(value) is int and not minimum <= value <= maximum:
             st.session_state[key] = max(minimum, min(maximum, value))
-    low = st.number_input("答えのいちばん小さい数", minimum, maximum, low_default, key="fc_min")
-    high = st.number_input("答えのいちばん大きい数", minimum, maximum, high_default, key="fc_max")
+    with st.container(key="fc_answer_range"):
+        st.markdown("**答えの範囲**")
+        smaller, larger = st.columns(2, gap="small")
+        with smaller:
+            low = st.number_input("小さい数", minimum, maximum, low_default, key="fc_min")
+        with larger:
+            high = st.number_input("大きい数", minimum, maximum, high_default, key="fc_max")
     count = st.select_slider("カードの数", [5, 10, 20, 30, 50], value=20, key="fc_count")
     order = st.radio("順番", ["shuffle", "ordered"], format_func=lambda value: "シャッフル" if value == "shuffle" else "順番どおり",
                      horizontal=True, key="fc_order", disabled=mode == "mixed")
@@ -93,14 +110,19 @@ def settings_screen():
              else flashcards.selection_error(low, high, count, order, mode, operand_max))
     if error:
         st.info(error)
-    st.caption("狭い範囲では同じカードを繰り返します。声が数として分からないときは採点しません。")
-    st.caption("音声ファイルは保存しません。ブラウザーの音声認識サービスが音声を処理する場合があります。"
-               "対応状況は端末・ブラウザーで異なり、使えない場合はテンキーで回答できます。")
     if st.button("カード スタート", key="fc_start", type="primary", disabled=error is not None, use_container_width=True):
         start_round(flashcards.generate_cards(low, high, count, order, mode, operand_max),
                     low, high, order, mode=mode, operand_max=operand_max)
-    if st.button("もどる", key="fc_back"):
-        goto("settings")
+    with st.expander("つかいかた"):
+        st.caption(descriptions[mode])
+        st.caption("答えを声・数字キー・テンキーで回答すると、自動で次へ進みます。わからないときは答えを見てから次へ進めます。")
+
+
+def settings_notes():
+    """アプリ共通の保護者向け折りたたみ内に表示する、カードの注意事項。"""
+    st.caption("狭い範囲では同じカードを繰り返します。声が数として分からないときは採点しません。")
+    st.caption("音声ファイルは保存しません。ブラウザーの音声認識サービスが音声を処理する場合があります。"
+               "対応状況は端末・ブラウザーで異なり、使えない場合はテンキーで回答できます。")
 
 
 def persist_pending(state):
