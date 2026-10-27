@@ -22,7 +22,9 @@ input{display:block;margin:0 auto;padding:4px;min-height:52px;font-size:34px}
 .voice-controls button{flex:1;min-width:0;margin:0;font-size:16px;padding:6px}
 .note{margin:6px 0;line-height:1.5}.status{margin:8px 0}
 .dont-know{margin:8px auto;min-height:44px;padding:6px;font-size:17px}
-.footer-actions{display:flex;gap:6px;margin:8px auto;max-width:360px}.footer-actions button{flex:1;min-width:0;margin:0;min-height:48px;font-size:17px;padding:6px}
+.card-navigation{display:flex;justify-content:flex-start;margin:0 0 12px}
+.card-navigation button{margin:0;min-height:48px;padding:6px 12px;font-size:16px;background:#fff;color:#49626a;border:1px solid #9db5c1}
+.footer-actions{display:flex;margin:8px auto;max-width:280px}.footer-actions button{flex:1;min-width:0;margin:0;min-height:48px;font-size:17px;padding:6px}
 </style></head><body><div id="root"></div><script>
 const root=document.getElementById('root');
 let currentToken=null,shownAt=0,pending=false,currentArgs={},recognition=null,advanceTimer=null,focusTimers=[];
@@ -55,6 +57,12 @@ window.addEventListener('message',event=>{
   voiceEnabled=args.voice_enabled===true;inputMethod='keyboard';
   shownAt=performance.now()-(Number(args.elapsed_sec)||0)*1000;
   root.replaceChildren();const card=document.createElement('div');card.className='card';
+  // Keep navigation above the question, away from the answer keypad.
+  if(args.phase!=='saved'&&args.phase!=='confirm'){
+    const navigation=document.createElement('div');navigation.className='card-navigation';
+    navigation.append(button('設定へ もどる',()=>{voiceEnabled=false;emit('back')}));
+    card.append(navigation);
+  }
   card.append(paragraph(args.question.replace(/\s*=\s*\?$/, ''),'question'));
   if(args.phase==='saved'){
     if(args.dont_know_used){
@@ -144,7 +152,7 @@ window.addEventListener('message',event=>{
     const dontKnow=button('わからない',()=>{voiceEnabled=false;clearTimeout(voiceTimer);emit('dont_know')});
     dontKnow.className='dont-know';
     const footer=document.createElement('div');footer.className='footer-actions';
-    footer.append(dontKnow,button('設定へ もどる',()=>{voiceEnabled=false;emit('back')}));
+    footer.append(dontKnow);
     card.append(keys,footer,paragraph('わからないときは、答えを見てから次へ進めるよ。'),paragraph('声が数字として分からないときは採点しません。音声ファイルは保存しません。'));
     input.onkeydown=event=>{
       if(pending||event.isComposing||event.ctrlKey||event.metaKey||event.altKey)return;
