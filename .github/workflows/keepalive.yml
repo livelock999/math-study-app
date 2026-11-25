@@ -15,7 +15,7 @@ jobs:
           SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
         run: |
           code=$(curl -s -o /dev/null -w '%{http_code}' \
-            "$SUPABASE_URL/rest/v1/math_attempts?select=id&limit=1" \
+            "$SUPABASE_URL/rest/v1/math_attempts?select=attempt_id&limit=1" \
             -H "apikey: $SUPABASE_SECRET_KEY" \
             -H "Authorization: Bearer $SUPABASE_SECRET_KEY")
           echo "HTTP $code"
